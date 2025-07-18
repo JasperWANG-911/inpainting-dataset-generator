@@ -3,6 +3,7 @@ import os
 from anthropic import Anthropic
 
 class RequestParserAgent:
+    """Agent to parse scene descriptions into structured JSON format."""
     def __init__(self, api_key: str):
         self.client = Anthropic(api_key=api_key)
         self.system_prompt = """Extract objects, quantities, and environment from the scene description.
@@ -44,16 +45,9 @@ Only include what's explicitly mentioned. Keep it simple."""
             
         return json.loads(json_str.strip())
 
-# 使用示例
+# Example usage
 if __name__ == "__main__":
     parser = RequestParserAgent(os.getenv("ANTHROPIC_API_KEY"))
-    
-    # 测试
-    test_inputs = [
-        "a house surrounded by a few trees in daylight",
-    ]
-    
-    for text in test_inputs:
-        print(f"\nInput: {text}")
-        result = parser.parse(text)
-        print(f"Output: {json.dumps(result, indent=2)}")
+    description = "a house surrounded by a few trees in daylight"
+    result = parser.parse(description)
+    print(f"Output: {json.dumps(result, indent=2)}")
