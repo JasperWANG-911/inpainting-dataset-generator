@@ -1,41 +1,59 @@
-import csv
 import os
+import csv
 from pathlib import Path
-from typing import List, Tuple
 
-def scan_blend_files(assets_dir: str) -> List[Tuple[str, str, str]]:
-    """scan all files in the assets directory"""
-    models = []
-    assets_path = Path(assets_dir)
-
-    # iterate through all files in the assets directory
-    for blend_file in assets_path.rglob('*.blend'):
-        file_name = blend_file.name
-        file_path = str(blend_file)
-
-        # get the relative path
-        relative_path = blend_file.relative_to(assets_path)
-        file_label = relative_path.parts[0].lower()
-        models.append((file_name, file_path, file_label))
+def scan_3d_files(folder_path, output_csv='3d_files_scan.csv'):
+    """
+    scans the "Asseets" folder for 3D files and generates a CSV record
+    """
     
-    return models
-
-def create_model_csv(csv_path: str, assets_dir: str = None, manual_data: List[Tuple] = None):
-    """return a csv file in the format: file_name, file_path, file_label"""
-    with open(csv_path, 'w', newline='', encoding='utf-8') as f:
-        writer = csv.writer(f)
-        writer.writerow(['file name', 'file path', 'file label'])
-        
-        if assets_dir and os.path.exists(assets_dir):
-            # scan the assets directory
-            print(f"Scanning {assets_dir} for .blend files...")
-            models = scan_blend_files(assets_dir)
-            writer.writerows(models)
-            print(f"Found {len(models)} .blend files")
+    # supported 3D file extensions 
+    extensions = ['.fbx', '.obj', '.gltf', '.glb', '.dae', '.stl', '.blend']
     
-    print(f"CSV file saved to: {csv_path}")
+    # store results
+    results = []
 
-# example usage
+    # convert to Path object
+    root_path = Path(folder_path)
+
+    # recursively scan the folder
+    for file_path in root_path.rglob('*'):
+        # check if it's a file and the extension matches
+        if file_path.is_file() and file_path.suffix.lower() in extensions:
+            # get the full path of the file
+            full_path = str(file_path)
+
+            # get the file name
+            file_name = file_path.name
+            
+            # get the parent folder name as tag
+            # if the file is directly under the root directory, use the root directory name
+            if file_path.parent == root_path:
+                tag = root_path.name
+            else:
+                tag = file_path.parent.name
+            
+            results.append([full_path, file_name, tag])
+
+    # write to CSV file
+    with open(output_csv, 'w', newline='', encoding='utf-8') as csvfile:
+        writer = csv.writer(csvfile)
+
+        # write header
+        writer.writerow(['file path', 'file name', 'tag'])
+
+        # write data
+        writer.writerows(results)
+
+    print(f"Scan complete! Found {len(results)} 3D files.")
+    print(f"Results saved to: {output_csv}")
+
+    return results
+
+# Usage example
 if __name__ == "__main__":
-    create_model_csv('model_catalog.csv', assets_dir='/Users/wangyinghao/Desktop/inpainting-dataset-generator/Assets')
-    
+    # Specify the folder path to scan
+    folder_to_scan = r"./Assets"  # Adjust this path as needed
+
+    # Call the function to scan and generate CSV
+    scan_3d_files(folder_to_scan, 'assets.csv')
