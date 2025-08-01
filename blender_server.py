@@ -84,13 +84,13 @@ class BLENDER_OT_code_server(bpy.types.Operator):
             return {'status': 'error', 'error': str(e)}
     
     def execute(self, context):
-        # 启动服务器线程
+        # start the server in a separate thread
         self.server = BlenderCodeServer()
         self.server_thread = threading.Thread(target=self.server.start_server)
         self.server_thread.daemon = True
         self.server_thread.start()
         
-        # 添加定时器
+        # add a timer to keep the modal operator running
         wm = context.window_manager
         self._timer = wm.event_timer_add(0.1, window=context.window)
         wm.modal_handler_add(self)
