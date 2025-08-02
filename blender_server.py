@@ -1,4 +1,3 @@
-# blender_server.py
 import bpy
 import socket
 import threading
@@ -33,7 +32,7 @@ class BlenderCodeServer:
                     'client': client,
                     'code': data
                 })
-                
+                            
             except socket.timeout:
                 continue
             except Exception as e:
@@ -78,8 +77,22 @@ class BLENDER_OT_code_server(bpy.types.Operator):
     
     def execute_code(self, code):
         try:
-            exec(code, {'bpy': bpy})
-            return {'status': 'success', 'error': None}
+            # Create a namespace for execution
+            namespace = {'bpy': bpy, '_result': None}
+            
+            # Execute the code
+            exec(code, namespace)
+            
+            # Check if _result was set
+            if '_result' in namespace and namespace['_result'] is not None:
+                return {
+                    'status': 'success',
+                    'error': None,
+                    'data': namespace['_result']
+                }
+            else:
+                return {'status': 'success', 'error': None}
+                
         except Exception as e:
             return {'status': 'error', 'error': str(e)}
     
@@ -118,3 +131,6 @@ if __name__ == "__main__":
     # start the server
     bpy.ops.wm.code_server()
     print("Blender Code Server is running. Press ESC in Blender to stop.")
+
+# demo usage:
+# in terminal: start "" "D:\blender-launcher.exe" --python "C:\Users\Jasper\Desktop\inpainting-dataset-generator\blender_server.py"
