@@ -1,6 +1,7 @@
 import socket
 import json
 import logging
+import os
 
 class ExecutionAgent:
     """
@@ -64,7 +65,12 @@ class ExecutionAgent:
 
             # Parse JSON response
             result = json.loads(response)
-            self.logger.info("Code execution successful")
+            
+            if result['status'] == 'success':
+                self.logger.info("Code execution successful")
+            else:
+                self.logger.error(f"Code execution error: {result.get('error', 'Unknown error')}")
+                
             return result
             
         except json.JSONDecodeError as e:
@@ -85,6 +91,19 @@ class ExecutionAgent:
                 except:
                     pass
     
+    def test_connection(self):
+        """
+        Test connection to Blender server.
+        """
+        try:
+            # Simple test code
+            test_code = "import bpy"
+            result = self.execute_code(test_code)
+            return result is not None and result.get('status') == 'success'
+        except Exception as e:
+            self.logger.error(f"Connection test failed: {e}")
+            return False
+    
     def execute_blender_script(self, script_path):
         """
         Execute a Blender script file
@@ -102,38 +121,25 @@ class ExecutionAgent:
         except Exception as e:
             self.logger.error(f"Failed to read script file: {e}")
             return None
+    
+    def execute_codes_file(self, file_path: str):
+        if not os.path.isfile(file_path):
+            raise FileNotFoundError(f"Script not found: {file_path}")
 
+        with open(file_path, 'r', encoding='utf-8') as f:
+            code = f.read()
 
-# demo use
+        self.logger.info(f"Sending {file_path} to Blender")
+
+        return self.execute_code(code)
+
+# demo_usage:
 if __name__ == "__main__":
-    # create an instance of ExecutionAgent
-    agent = ExecutionAgent()
+    execution_agent = ExecutionAgent()
 
-    # test connection
-    if agent.test_connection():
-        print("✓ Blender connection test successful")
-
-        # execute custom code
-        custom_code = """
-import bpy
-import json
-
-# Get scene information
-scene = bpy.context.scene
-result = {
-    'status': 'success',
-    'scene_name': scene.name,
-    'object_count': len(scene.objects),
-    'frame_current': scene.frame_current
-}
-
-print(json.dumps(result))
-"""
-        
-        result = agent.execute_code(custom_code)
-        if result:
-            print(f"Execution result: {result}")
-        else:
-            print("Code execution failed")
+    if not execution_agent.test_connection():
+        print("Cannot connect to Blender server. Please ensure it is running.")
     else:
-        print("Blender connection test failed")
+        result = execution_agent.execute_codes_file("../execution_code.py")
+        # check status of result
+        print("Execution result:", result)
