@@ -3,6 +3,7 @@ import socket
 import threading
 import json
 import queue
+import time
 
 # global message queue for inter-thread communication
 message_queue = queue.Queue()
@@ -132,5 +133,11 @@ if __name__ == "__main__":
     bpy.ops.wm.code_server()
     print("Blender Code Server is running. Press ESC in Blender to stop.")
 
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("Shutting down...")
+
 # demo usage:
-# in terminal: start "" "D:\blender-launcher.exe" --python "C:\Users\Jasper\Desktop\inpainting-dataset-generator\blender_server.py"
+# in terminal: start "" "D:\blender-launcher.exe" --python "D:\Python Projects\inpainting-dataset-generator\blender_server.py"
