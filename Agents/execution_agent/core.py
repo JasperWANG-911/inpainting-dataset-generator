@@ -2,6 +2,7 @@ import socket
 import json
 import logging
 import os
+from pathlib import Path
 
 class ExecutionAgent:
     """
@@ -16,6 +17,7 @@ class ExecutionAgent:
         self.port = port
         self.timeout = timeout
         self.logger = self._setup_logger()
+        self.project_root = Path(__file__).parent.parent
     
     def _setup_logger(self):
         """Set up the logger."""
@@ -123,6 +125,9 @@ class ExecutionAgent:
             return None
     
     def execute_codes_file(self, file_path: str):
+        if not os.path.isabs(file_path):
+            file_path = self.project_root / file_path
+        
         if not os.path.isfile(file_path):
             raise FileNotFoundError(f"Script not found: {file_path}")
 
@@ -140,6 +145,6 @@ if __name__ == "__main__":
     if not execution_agent.test_connection():
         print("Cannot connect to Blender server. Please ensure it is running.")
     else:
-        result = execution_agent.execute_codes_file("../execution_code.py")
+        result = execution_agent.execute_codes_file("execution_code.py")
         # check status of result
         print("Execution result:", result)
