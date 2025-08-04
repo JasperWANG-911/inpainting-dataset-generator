@@ -1,14 +1,34 @@
 {
   "steps": {
-    "1": { "func": "clear_scene",
-           "editable_params": {} ,
-           "task_description": "Clear the current scene to start fresh.",
-           "edit_hints":"If the scene is not empty, need to run clear_scene() again."
+    "1": {
+      "func": "clear_scene",
+      "editable_params": {},
+      "task_description": "Clear the current scene to start fresh.",
+      "edit_hints": "If the scene is not empty, need to run clear_scene() again."
+    },
+    "2": {
+      "func": "add_ground",
+      "editable_params": {
+        "size": 100
       },
-    "2": { "func": "add_ground",
-           "editable_params": { "size": 100 },
-           "task_description": "Add a ground plane to the scene so that objects can be stick to it. A default size of 100 is used, it should be large enough to accommodate all objects.",
-           "edit_hints": "If a ground is not created, need to run add_ground() again."
-         }
+      "task_description": "Add a ground plane to the scene so that objects can be stick to it. A default size of 100 is used, it should be large enough to accommodate all objects.",
+      "edit_hints": "If a ground is not created, need to run add_ground() again."
+    },
+    "3": {
+      "func": "import_object",
+      "editable_params": {
+        "filepath": "{{DYNAMIC}}"
+      },
+      "task_description": "Import house model into the scene.",
+      "edit_hints": "Check if the house object is properly imported and visible."
+    },
+    "4": {
+      "func": "stick_object_to_ground",
+      "editable_params": {
+        "object": "house"
+      },
+      "task_description": "Stick the house object to the ground plane.",
+      "edit_hints": "If the house is not properly grounded or appears to be floating, check if the object name is correct and if the ground object exists."
+    }
   }
 }

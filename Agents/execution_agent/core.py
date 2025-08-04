@@ -160,7 +160,90 @@ class ExecutionAgent:
         self.logger.info(f"Sending {file_path} to Blender")
         self.logger.info(f"Code preview (first 200 chars): {code[:200]}...")
 
-        return self.execute_code(code)
+        # Execute the main code
+        result = self.execute_code(code)
+        
+        # After successful execution, capture scene views for reviewing
+        if result and result.get('status') == 'success':
+            self.logger.info("Capturing scene views for review...")
+            
+            # Code to capture views
+            capture_code = """
+import bpy
+import math
+import os
+
+# Create output directory if it doesn't exist
+output_dir = r"D:\\Python Projects\\inpainting-dataset-generator\\impainting_dataset_generator\\reviewing_images"
+os.makedirs(output_dir, exist_ok=True)
+
+# Store original camera and create a new one for capturing
+original_camera = bpy.context.scene.camera
+
+# Create a new camera if none exists
+if not original_camera:
+    bpy.ops.object.camera_add(location=(0, 0, 0))
+    camera = bpy.context.active_object
+    bpy.context.scene.camera = camera
+else:
+    camera = original_camera
+
+# Set render resolution
+bpy.context.scene.render.resolution_x = 800
+bpy.context.scene.render.resolution_y = 600
+
+# Define camera positions for 5 views
+views = {
+    'top': {
+        'location': (0, 0, 10),
+        'rotation': (0, 0, 0)
+    },
+    'front': {
+        'location': (0, -10, 2),
+        'rotation': (math.radians(80), 0, 0)
+    },
+    'back': {
+        'location': (0, 10, 2),
+        'rotation': (math.radians(80), 0, math.radians(180))
+    },
+    'left': {
+        'location': (-10, 0, 2),
+        'rotation': (math.radians(80), 0, math.radians(-90))
+    },
+    'right': {
+        'location': (10, 0, 2),
+        'rotation': (math.radians(80), 0, math.radians(90))
+    }
+}
+
+# Capture each view
+for view_name, view_data in views.items():
+    # Set camera position and rotation
+    camera.location = view_data['location']
+    camera.rotation_euler = view_data['rotation']
+    
+    # Set output path
+    output_path = os.path.join(output_dir, f"{view_name}.png")
+    bpy.context.scene.render.filepath = output_path
+    
+    # Render the image
+    bpy.ops.render.render(write_still=True)
+    print(f"Captured {view_name} view: {output_path}")
+
+# Restore original camera if we created a new one
+if not original_camera:
+    bpy.data.objects.remove(camera, do_unlink=True)
+
+print("Scene capture completed")
+"""
+            
+            capture_result = self.execute_code(capture_code)
+            if capture_result and capture_result.get('status') == 'success':
+                self.logger.info("Scene views captured successfully")
+            else:
+                self.logger.warning("Failed to capture scene views")
+        
+        return result
 
 # demo_usage:
 if __name__ == "__main__":

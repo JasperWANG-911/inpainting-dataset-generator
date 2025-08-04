@@ -94,7 +94,7 @@ class CodingAgent:
         params = step_info.get("editable_params", {})
         hints = step_info.get("edit_hints", "")
         
-        # Build prompt without any markdown formatting
+        # Build prompt
         prompt_lines = [
             f"Generate Blender Python code for Step {step} of scene construction.",
             "",
@@ -121,7 +121,7 @@ class CodingAgent:
             f"6. Start with comment: # Step {step}: {task_description}",
             "7. Only write code for this specific step",
             "",
-            "Output ONLY executable Python code. No markdown, no code blocks, no explanations."
+            "Please output only the Python code without any markdown formatting or code blocks."
         ])
         
         prompt = "\n".join(prompt_lines)
@@ -135,14 +135,25 @@ class CodingAgent:
         
         generated_code = response.content[0].text.strip()
         
-        # Clean any markdown if it still appears
-        if "```" in generated_code:
-            # Extract code between backticks
-            import re
-            pattern = r'```(?:python)?\s*(.*?)```'
-            match = re.search(pattern, generated_code, re.DOTALL)
-            if match:
-                generated_code = match.group(1).strip()
+        # Simple markdown cleaning - just handle the most common cases
+        import re
+        
+        # If the entire response is wrapped in a code block, extract it
+        if generated_code.startswith('```') and generated_code.endswith('```'):
+            # Remove code block markers
+            generated_code = re.sub(r'^```(?:python)?\n?', '', generated_code)
+            generated_code = re.sub(r'\n?```$', '', generated_code)
+        
+        # Also handle case where there might be multiple code blocks
+        elif '```' in generated_code:
+            # Extract content from code blocks
+            pattern = r'```(?:python)?\n?(.*?)```'
+            matches = re.findall(pattern, generated_code, re.DOTALL)
+            if matches:
+                generated_code = '\n'.join(matches)
+        
+        # Final trim
+        generated_code = generated_code.strip()
         
         return generated_code
 

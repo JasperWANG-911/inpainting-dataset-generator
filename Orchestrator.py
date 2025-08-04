@@ -5,9 +5,11 @@ import asyncio
 from pathlib import Path
 from typing import Dict, List, Optional
 import logging
+import os
 
 class Orchestrator:
     """Main orchestrator that coordinates all agents"""
+    
     
     def __init__(self):
         self.agents = {
@@ -16,9 +18,11 @@ class Orchestrator:
             "scene_planning": "http://localhost:8003",
             "coding": "http://localhost:8004"
         }
+        self.project_root = Path(__file__).parent
         self.workflow_config = self._load_workflow_config()
         self.logger = self._setup_logger()
-        self.timeout = httpx.Timeout(30.0, connect=5.0)
+        self.timeout = httpx.Timeout(60, connect=10.0)
+        self.current_combination = None
         
     def _setup_logger(self):
         logger = logging.getLogger('Orchestrator')
@@ -76,6 +80,59 @@ class Orchestrator:
             
         self.logger.info(f"Scene planning successful. Generated {result['total_combinations']} combinations")
         return result
+    def _update_import_step(self, step_config: dict, combination: Dict, step_num: int) -> dict:
+        """Update import step with actual file paths from combination"""
+        # Create a copy of step config to avoid modifying the original
+        updated_config = step_config.copy()
+        
+        # Map step numbers to object types (adjust based on your workflow)
+        step_to_object_type = {
+            3: "house",  # Step 3 imports house
+            4: "tree",   # Step 4 imports first tree
+            5: "tree"    # Step 5 imports second tree (if exists)
+        }
+        
+        if step_num in step_to_object_type:
+            object_type = step_to_object_type[step_num]
+            
+            # Find objects of this type in combination
+            matching_objects = [obj for obj in combination["objects"] if obj["type"] == object_type]
+            
+            if matching_objects:
+                # For house, use the first one; for trees, use based on step number
+                if object_type == "house":
+                    obj = matching_objects[0]
+                else:
+                    # For trees, use index based on step number
+                    tree_index = step_num - 4  # Step 4 -> index 0, Step 5 -> index 1
+                    if tree_index < len(matching_objects):
+                        obj = matching_objects[tree_index]
+                    else:
+                        return updated_config
+                
+                # DEBUG: Print file path information
+                self.logger.info(f"DEBUG: Original file path from combination: {obj['file_path']}")
+                
+                # Convert to absolute path
+                filepath = obj["file_path"]
+                if not os.path.isabs(filepath):
+                    # Make it absolute relative to project root
+                    filepath = os.path.abspath(os.path.join(self.project_root, filepath))
+                
+                self.logger.info(f"DEBUG: Absolute file path: {filepath}")
+                self.logger.info(f"DEBUG: File exists: {os.path.exists(filepath)}")
+                
+                # Update the filepath parameter
+                updated_config["editable_params"] = {
+                    "filepath": filepath
+                }
+                
+                # Update task description to be more specific
+                updated_config["task_description"] = f"Import {obj['type']} ({obj['file_name']}) into the scene."
+                
+                self.logger.info(f"Updated step {step_num} with filepath: {filepath}")
+        
+        return updated_config
     
     async def execute_workflow_steps(self, combination: Dict):
         """Execute all workflow steps with review loop"""
@@ -87,6 +144,11 @@ class Orchestrator:
             step_config = self.workflow_config["steps"][str(step_num)]
             task_description = step_config["task_description"]
             
+            # Dynamically update parameters for import steps
+            if step_config["func"] == "import_object" and "{{DYNAMIC}}" in str(step_config.get("editable_params", {})):
+                # Find the corresponding object from combination
+                step_config = self._update_import_step(step_config, combination, step_num)
+            
             max_retries = 3
             retry_count = 0
             review_result = None
@@ -95,13 +157,15 @@ class Orchestrator:
                 # Generate/update code for this step
                 self.logger.info(f"Generating code for step {step_num}...")
                 
+                # Pass the updated step config to coding agent
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
                     response = await client.post(
                         f"{self.agents['coding']}/generate-code",
                         json={
                             "step": step_num,
                             "task_description": task_description,
-                            "review_result": review_result
+                            "review_result": review_result,
+                            "step_config": step_config  # Pass the complete step config
                         }
                     )
                 
@@ -177,7 +241,10 @@ class Orchestrator:
             execution_code_path.unlink()
             self.logger.info("Cleared existing execution_code.py")
         
-        # Execute workflow steps
+        # Store combination data for coding agent to access
+        self.current_combination = combination
+        
+        # Execute workflow steps with combination data
         success = await self.execute_workflow_steps(combination)
         
         if success:
