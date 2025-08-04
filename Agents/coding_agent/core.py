@@ -17,11 +17,11 @@ class CodingAgent:
             raise RuntimeError("Missing ANTHROPIC_API_KEY environment variable")
         
         self.client = Anthropic(api_key=api_key)
-        self.model = "claude-opus-4-20250514"   # change model name if needed
+        self.model = "claude-opus-4-20250514"
         
         # Path to execution_code.py in project root
         self.project_root = Path(__file__).parent.parent.parent
-        self.execution_code_path = self.project_root / "execution_code.py" # Path to the execution code file
+        self.execution_code_path = self.project_root / "execution_code.py"
         
         # Track fixed steps
         self.fixed_steps = set()
@@ -32,7 +32,7 @@ class CodingAgent:
     
     def _load_api_reference(self) -> str:
         """Load scene construction API reference."""
-        api_path = self.project_root / "API/scene_construction_API.py" # Path to the API reference file
+        api_path = self.project_root / "API/scene_construction_API.py"
         if api_path.exists():
             with open(api_path, 'r', encoding='utf-8') as f:
                 return f.read()
@@ -40,7 +40,7 @@ class CodingAgent:
     
     def _load_workflow_config(self) -> dict:
         """Load workflow configuration."""
-        config_path = self.project_root / "workflow_config.json" # Path to the workflow config file
+        config_path = self.project_root / "workflow_config.json"
         if config_path.exists():
             with open(config_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
@@ -94,59 +94,66 @@ class CodingAgent:
         params = step_info.get("editable_params", {})
         hints = step_info.get("edit_hints", "")
         
-        prompt = f"""Generate Blender Python code for Step {step} of scene construction.
-
-Task: {task_description}
-Function to use: {func_name}
-Parameters: {json.dumps(params)}
-Hints: {hints}
-
-
-{f"Previous review comment: {review_comment}" if review_comment else ""}
-
-Available API functions:
-```python
-{self.api_reference}
-
-Requirements:
-
-1. Use the specified function: {func_name}
-2. Import the functions from scene_construction_API first
-3. Apply the given parameters: {params}
-4. Include error handling
-5. Add brief comments explaining the logic
-6. Start with comment: # Step {step}: {task_description}
-7. Only write code for this specific step
-
-Output only the Python code for this step, no explanations.
-
-Alawys add the following code to the end:
-........
-
-"""
+        # Build prompt without any markdown formatting
+        prompt_lines = [
+            f"Generate Blender Python code for Step {step} of scene construction.",
+            "",
+            f"Task: {task_description}",
+            f"Function to use: {func_name}",
+            f"Parameters: {json.dumps(params)}",
+            f"Hints: {hints}",
+            ""
+        ]
+        
+        if review_comment:
+            prompt_lines.extend([f"Previous review comment: {review_comment}", ""])
+        
+        prompt_lines.extend([
+            "Available API functions:",
+            self.api_reference,
+            "",
+            "Requirements:",
+            f"1. Use the specified function: {func_name}",
+            "2. Import functions from API.scene_construction_API",
+            f"3. Apply the given parameters: {params}",
+            "4. Include error handling with try/except",
+            "5. Add brief comments",
+            f"6. Start with comment: # Step {step}: {task_description}",
+            "7. Only write code for this specific step",
+            "",
+            "Output ONLY executable Python code. No markdown, no code blocks, no explanations."
+        ])
+        
+        prompt = "\n".join(prompt_lines)
         
         response = self.client.messages.create(
-        model=self.model,
-        max_tokens=1000,
-        temperature=0.3,
-        messages=[{"role": "user", "content": prompt}]
-    )
-    
-        return response.content[0].text.strip()
+            model=self.model,
+            max_tokens=1000,
+            temperature=0.3,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        
+        generated_code = response.content[0].text.strip()
+        
+        # Clean any markdown if it still appears
+        if "```" in generated_code:
+            # Extract code between backticks
+            import re
+            pattern = r'```(?:python)?\s*(.*?)```'
+            match = re.search(pattern, generated_code, re.DOTALL)
+            if match:
+                generated_code = match.group(1).strip()
+        
+        return generated_code
 
     def generate_code(self, step: int, task_description: str, review_result: Optional[dict] = None) -> dict:
         """
         Generate or update code based on step and review results.
-        
-        Args:
-            step: Current step number
-            task_description: Description of what this step should do
-            review_result: {"ok": bool, "comment": str} from reviewing agent
-            
-        Returns:
-            {"success": bool, "message": str, "code_path": str}
         """
         try:
+            # Get step info from workflow config
+            step_info = self.workflow_config.get("steps", {}).get(str(step), {})
+            
             current_code = self._read_current_code()
             sections = self._parse_code_sections(current_code)
             
@@ -184,8 +191,9 @@ Alawys add the following code to the end:
             complete_code += "import sys\nimport os\n\n"
             complete_code += "# Add API path and import functions\n"
             complete_code += f"sys.path.append(r'{self.project_root}')\n"
-            complete_code += "from scene_construction_API import *\n\n"
+            complete_code += "from API.scene_construction_API import *\n\n"
             
+            # Add all sections in order
             for step_num in sorted(sections.keys()):
                 complete_code += sections[step_num] + "\n\n"
             

@@ -4,6 +4,7 @@ import random
 import os
 from typing import List, Dict, Optional
 from anthropic import Anthropic
+from pathlib import Path
 
 
 class ScenePlanningAgent:
@@ -19,6 +20,9 @@ class ScenePlanningAgent:
         
         self.client = Anthropic(api_key=api_key)
         self.model = "claude-3-haiku-20240307"
+        
+        # Get project root (2 levels up from scene_planning_agent/core.py)
+        self.project_root = Path(__file__).parent.parent.parent
         
         # System prompt for parsing
         self.system_prompt = """Extract objects and quantities from the scene description.
@@ -60,6 +64,16 @@ Only include what's explicitly mentioned. Keep it simple."""
     
     def load_assets_csv(self, csv_path: str) -> Dict[str, List[Dict]]:
         """Load assets.csv and organize by tag."""
+        # Handle both absolute and relative paths
+        if not os.path.isabs(csv_path):
+            # If relative path, make it relative to project root
+            csv_path = self.project_root / csv_path
+        
+        csv_path = Path(csv_path)
+        
+        if not csv_path.exists():
+            raise FileNotFoundError(f"Assets CSV not found at: {csv_path}")
+        
         assets_by_tag = {}
         
         with open(csv_path, 'r', encoding='utf-8') as csvfile:

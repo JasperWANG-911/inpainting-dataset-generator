@@ -9,7 +9,7 @@ class ExecutionAgent:
     ExecutionAgent, to execute code in Blender.
     """
     
-    def __init__(self, host='localhost', port=8089, timeout=10):
+    def __init__(self, host='localhost', port=8089, timeout=60):  # Increased timeout to 60 seconds
         """
         initialize the ExecutionAgent. Need to run blender_server.py first.
         """
@@ -17,7 +17,7 @@ class ExecutionAgent:
         self.port = port
         self.timeout = timeout
         self.logger = self._setup_logger()
-        self.project_root = Path(__file__).parent.parent
+        self.project_root = Path(__file__).parent.parent.parent  # Fixed path
     
     def _setup_logger(self):
         """Set up the logger."""
@@ -59,12 +59,31 @@ class ExecutionAgent:
 
             # Send code
             self.logger.info("Sending code to Blender...")
+            self.logger.debug(f"Code length: {len(code)} characters")
             client.send(code.encode('utf-8'))
 
-            # Receive response
+            # Receive response with larger buffer
             self.logger.info("Waiting for Blender response...")
-            response = client.recv(4096).decode('utf-8')
-
+            response_parts = []
+            while True:
+                try:
+                    part = client.recv(4096)
+                    if not part:
+                        break
+                    response_parts.append(part.decode('utf-8'))
+                    # Try to parse as JSON to see if we got complete response
+                    try:
+                        json.loads(''.join(response_parts))
+                        break
+                    except json.JSONDecodeError:
+                        # Not complete yet, continue receiving
+                        continue
+                except socket.timeout:
+                    self.logger.warning("Socket timeout while receiving response")
+                    break
+            
+            response = ''.join(response_parts)
+            
             # Parse JSON response
             result = json.loads(response)
             
@@ -77,7 +96,11 @@ class ExecutionAgent:
             
         except json.JSONDecodeError as e:
             self.logger.error(f"JSON decoding failed: {e}")
-            self.logger.error(f"Raw response: {response}")
+            self.logger.error(f"Raw response: {response if 'response' in locals() else 'No response received'}")
+            return None
+            
+        except socket.timeout:
+            self.logger.error("Socket timeout - execution took too long")
             return None
             
         except Exception as e:
@@ -135,6 +158,7 @@ class ExecutionAgent:
             code = f.read()
 
         self.logger.info(f"Sending {file_path} to Blender")
+        self.logger.info(f"Code preview (first 200 chars): {code[:200]}...")
 
         return self.execute_code(code)
 

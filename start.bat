@@ -8,16 +8,26 @@ REM force clean up old processes
 echo Cleaning up old processes...
 taskkill /IM python.exe /F 2>nul
 taskkill /IM blender.exe /F 2>nul
-timeout /t 3 /nobreak > nul
 
-set BLENDER_PATH=D:\blender-launcher.exe
+REM Kill processes using specific ports
+echo Cleaning up ports...
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr :8001') do taskkill /PID %%a /F 2>nul
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr :8002') do taskkill /PID %%a /F 2>nul
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr :8003') do taskkill /PID %%a /F 2>nul
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr :8004') do taskkill /PID %%a /F 2>nul
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr :8089') do taskkill /PID %%a /F 2>nul
+
+timeout /t 5 /nobreak > nul
+
+set BLENDER_PATH=D:\blender.exe
 set PROJECT_ROOT=%cd%
 set PYTHON_PATH=C:\Users\Jasper\miniconda3\python.exe
 
-REM activate Blender Server
-echo [1/5] Starting Blender Server...
-start "Blender Server" "%BLENDER_PATH%" --background --python "%PROJECT_ROOT%\blender_server.py"
-timeout /t 3 /nobreak > nul
+REM activate Blender Server in background mode
+echo [1/5] Starting Blender Server (background mode)...
+start "Blender Server" cmd /k ""%BLENDER_PATH%" -b --python "%PROJECT_ROOT%\blender_server.py""
+echo Waiting for Blender server to start...
+timeout /t 5 /nobreak > nul
 
 REM activate Execution Agent
 echo [2/5] Starting Execution Agent...
@@ -31,14 +41,16 @@ timeout /t 3 /nobreak > nul
 
 echo [4/5] Starting Scene Planning Agent...
 start "Scene Planning Agent" cmd /k "cd /d "%PROJECT_ROOT%\agents\scene_planning_agent" && "%PYTHON_PATH%" -m uvicorn main:app --host 0.0.0.0 --port 8003"
+timeout /t 3 /nobreak > nul
 
-echo [4/5] Starting Coding Agent...
+echo [5/5] Starting Coding Agent...
 start "Coding Agent" cmd /k "cd /d "%PROJECT_ROOT%\agents\coding_agent" && "%PYTHON_PATH%" -m uvicorn main:app --host 0.0.0.0 --port 8004"
+timeout /t 3 /nobreak > nul
 
 echo.
 echo ========================================
 echo All services started successfully!
-echo - Blender Server on port 8089
+echo - Blender Server on port 8089 (background mode)
 echo - Execution Agent API on port 8001
 echo - Reviewing Agent API on port 8002
 echo - Scene Planning Agent API on port 8003
