@@ -15,22 +15,25 @@ set PROJECT_ROOT=%cd%
 set PYTHON_PATH=C:\Users\Jasper\miniconda3\python.exe
 
 REM activate Blender Server
-echo [1/4] Starting Blender Server...
+echo [1/5] Starting Blender Server...
 start "Blender Server" "%BLENDER_PATH%" --background --python "%PROJECT_ROOT%\blender_server.py"
 timeout /t 3 /nobreak > nul
 
 REM activate Execution Agent
-echo [2/4] Starting Execution Agent...
+echo [2/5] Starting Execution Agent...
 start "Execution Agent" cmd /k "cd /d "%PROJECT_ROOT%\agents\execution_agent" && "%PYTHON_PATH%" -m uvicorn main:app --host 0.0.0.0 --port 8001"
 timeout /t 3 /nobreak > nul
 
 REM activate Reviewing Agent
-echo [3/4] Starting Reviewing Agent...
+echo [3/5] Starting Reviewing Agent...
 start "Reviewing Agent" cmd /k "cd /d "%PROJECT_ROOT%\agents\reviewing_agent" && "%PYTHON_PATH%" -m uvicorn main:app --host 0.0.0.0 --port 8002"
 timeout /t 3 /nobreak > nul
 
-echo [4/4] Starting Scene Planning Agent...
+echo [4/5] Starting Scene Planning Agent...
 start "Scene Planning Agent" cmd /k "cd /d "%PROJECT_ROOT%\agents\scene_planning_agent" && "%PYTHON_PATH%" -m uvicorn main:app --host 0.0.0.0 --port 8003"
+
+echo [4/5] Starting Coding Agent...
+start "Coding Agent" cmd /k "cd /d "%PROJECT_ROOT%\agents\coding_agent" && "%PYTHON_PATH%" -m uvicorn main:app --host 0.0.0.0 --port 8004"
 
 echo.
 echo ========================================
@@ -39,11 +42,13 @@ echo - Blender Server on port 8089
 echo - Execution Agent API on port 8001
 echo - Reviewing Agent API on port 8002
 echo - Scene Planning Agent API on port 8003
+echo - Coding Agent API on port 8004
 echo.
 echo Test APIs at:
 echo - http://localhost:8001/docs (Execution)
 echo - http://localhost:8002/docs (Reviewing)
 echo - http://localhost:8003/docs (Scene Planning)
+echo - http://localhost:8004/docs (Coding)
 echo ========================================
 echo.
 echo Press any key to stop all services...
