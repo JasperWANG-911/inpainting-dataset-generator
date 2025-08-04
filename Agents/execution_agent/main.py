@@ -22,3 +22,7 @@ async def run_script(req: RunScriptRequest):
         return RunScriptResponse(ok=res.get("status")=="success", result=res)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/health")
+async def health():
+    return {"status": "healthy", "agent": "execution"}
