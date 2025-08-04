@@ -7,137 +7,120 @@ import time
 
 # global message queue for inter-thread communication
 message_queue = queue.Queue()
+server_running = False
 
-class BlenderCodeServer:
-    def __init__(self, port=8089):
-        self.port = port
-        self.server = None
-        self.running = False
-        
-    def start_server(self):
-        self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.server.settimeout(0.1)  # add a timeout to avoid blocking
-        self.server.bind(('localhost', self.port))
-        self.server.listen(1)
-        self.running = True
-        
-        print(f"Blender server started on port {self.port}")
-        
-        while self.running:
-            try:
-                client, address = self.server.accept()
-                data = client.recv(4096).decode('utf-8')
-                
-                message_queue.put({
-                    'client': client,
-                    'code': data
-                })
-                            
-            except socket.timeout:
-                continue
-            except Exception as e:
-                if self.running:
-                    print(f"Server error: {e}")
-
-class BLENDER_OT_code_server(bpy.types.Operator):
-    """running a code server in Blender"""
-    bl_idname = "wm.code_server"
-    bl_label = "Code Server"
-    
-    _timer = None
-    server = None
-    server_thread = None
-    
-    def modal(self, context, event):
-        if event.type == 'TIMER':
-            # process code in the queue
-            while not message_queue.empty():
-                try:
-                    msg = message_queue.get_nowait()
-                    client = msg['client']
-                    code = msg['code']
-                    
-                    # execute code in the main thread
-                    result = self.execute_code(code)
-                    
-                    # send result
-                    client.send(json.dumps(result).encode('utf-8'))
-                    client.close()
-                    
-                except queue.Empty:
-                    break
-                except Exception as e:
-                    print(f"Error processing message: {e}")
-        
-        if event.type == 'ESC':
-            self.cancel(context)
-            return {'CANCELLED'}
-            
-        return {'PASS_THROUGH'}
-    
-    def execute_code(self, code):
-        try:
-            # Create a namespace for execution
-            namespace = {'bpy': bpy, '_result': None}
-            
-            # Execute the code
-            exec(code, namespace)
-            
-            # Check if _result was set
-            if '_result' in namespace and namespace['_result'] is not None:
-                return {
-                    'status': 'success',
-                    'error': None,
-                    'data': namespace['_result']
-                }
-            else:
-                return {'status': 'success', 'error': None}
-                
-        except Exception as e:
-            return {'status': 'error', 'error': str(e)}
-    
-    def execute(self, context):
-        # start the server in a separate thread
-        self.server = BlenderCodeServer()
-        self.server_thread = threading.Thread(target=self.server.start_server)
-        self.server_thread.daemon = True
-        self.server_thread.start()
-        
-        # add a timer to keep the modal operator running
-        wm = context.window_manager
-        self._timer = wm.event_timer_add(0.1, window=context.window)
-        wm.modal_handler_add(self)
-        
-        return {'RUNNING_MODAL'}
-    
-    def cancel(self, context):
-        wm = context.window_manager
-        wm.event_timer_remove(self._timer)
-        
-        if self.server:
-            self.server.running = False
-            
-        print("Server stopped")
-
-def register():
-    bpy.utils.register_class(BLENDER_OT_code_server)
-
-def unregister():
-    bpy.utils.unregister_class(BLENDER_OT_code_server)
-
-if __name__ == "__main__":
-    register()
-    
-    # start the server
-    bpy.ops.wm.code_server()
-    print("Blender Code Server is running. Press ESC in Blender to stop.")
-
+def execute_code_safe(code):
+    """Execute code and return result"""
     try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("Shutting down...")
+        namespace = {'bpy': bpy, '_result': None}
+        exec(code, namespace)
+        
+        if '_result' in namespace and namespace['_result'] is not None:
+            return {
+                'status': 'success',
+                'error': None,
+                'data': namespace['_result']
+            }
+        else:
+            return {'status': 'success', 'error': None}
+    except Exception as e:
+        return {'status': 'error', 'error': str(e)}
 
-# demo usage:
-# in terminal: start "" "D:\blender-launcher.exe" --python "D:\Python Projects\inpainting-dataset-generator\blender_server.py"
+def server_thread_func(port=8089):
+    """Server thread function"""
+    global server_running
+    
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.settimeout(0.5)
+    server.bind(('localhost', port))
+    server.listen(1)
+    server_running = True
+    
+    print(f"Blender server started on port {port}")
+    
+    while server_running:
+        try:
+            client, address = server.accept()
+            
+            # Receive data
+            data = b""
+            while True:
+                chunk = client.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+                if len(chunk) < 4096:
+                    break
+            
+            code = data.decode('utf-8')
+            
+            # Put in queue for main thread to process
+            response_queue = queue.Queue()
+            message_queue.put({
+                'code': code,
+                'response_queue': response_queue
+            })
+            
+            # Wait for response (with timeout)
+            try:
+                result = response_queue.get(timeout=30)
+            except queue.Empty:
+                result = {'status': 'error', 'error': 'Execution timeout'}
+            
+            # Send response
+            client.send(json.dumps(result).encode('utf-8'))
+            client.close()
+            
+        except socket.timeout:
+            continue
+        except Exception as e:
+            if server_running:
+                print(f"Server error: {e}")
+    
+    server.close()
+    print("Server stopped")
+
+def process_messages():
+    """Process pending messages - called by timer"""
+    try:
+        # Process one message per call to avoid blocking
+        if not message_queue.empty():
+            msg = message_queue.get_nowait()
+            code = msg['code']
+            response_queue = msg['response_queue']
+            
+            # Execute code
+            result = execute_code_safe(code)
+            
+            # Send result back
+            response_queue.put(result)
+    except queue.Empty:
+        pass
+    except Exception as e:
+        print(f"Error processing message: {e}")
+    
+    # Keep the timer running
+    return 0.05  # Check every 50ms
+
+# Start everything when the script runs
+if __name__ == "__main__":
+    print("Starting Blender Code Server...")
+    
+    # Start server thread
+    thread = threading.Thread(target=server_thread_func)
+    thread.daemon = True
+    thread.start()
+    
+    # Register timer to process messages
+    if hasattr(bpy.app.timers, 'is_registered'):
+        if not bpy.app.timers.is_registered(process_messages):
+            bpy.app.timers.register(process_messages)
+    else:
+        # Older Blender versions
+        bpy.app.timers.register(process_messages)
+    
+    print("Server is running. Blender GUI should remain responsive.")
+    
+    # In GUI mode, we don't need to keep the script running
+    # The timer will keep everything working
