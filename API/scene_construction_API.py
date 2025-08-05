@@ -37,24 +37,50 @@ def add_ground(size=50):
 
 # Function to import objects
 def import_object(filepath):
+    """Import 3D object from file"""
+    # Ensure file exists
+    if not os.path.exists(filepath):
+        print(f"Error: File not found: {filepath}")
+        return
+    
     # get the file extension
     ext = os.path.splitext(filepath)[1].lower()
     
     # import based on file type
-    if ext == '.obj':
-        bpy.ops.import_scene.obj(filepath=filepath)
-    elif ext == '.fbx':
-        bpy.ops.import_scene.fbx(filepath=filepath)
-    elif ext == '.gltf' or ext == '.glb':
-        bpy.ops.import_scene.gltf(filepath=filepath)
-    elif ext == '.blend':
-        with bpy.data.libraries.load(filepath) as (data_from, data_to):
-            data_to.objects = data_from.objects[:]
-        for obj in data_to.objects:
-            if obj is not None:
-                bpy.context.collection.objects.link(obj)
-    else:
-        print(f"unsupported file type: {ext}")
+    try:
+        if ext == '.obj':
+            # Enable OBJ import addon if not enabled
+            if 'import_scene.obj' not in dir(bpy.ops):
+                bpy.ops.preferences.addon_enable(module='io_scene_obj')
+            bpy.ops.import_scene.obj(filepath=filepath)
+        elif ext == '.fbx':
+            # Enable FBX import addon if not enabled
+            if 'import_scene.fbx' not in dir(bpy.ops):
+                bpy.ops.preferences.addon_enable(module='io_scene_fbx')
+            bpy.ops.import_scene.fbx(filepath=filepath)
+        elif ext == '.gltf' or ext == '.glb':
+            # Enable glTF import addon if not enabled
+            if 'import_scene.gltf' not in dir(bpy.ops):
+                bpy.ops.preferences.addon_enable(module='io_scene_gltf2')
+            bpy.ops.import_scene.gltf(filepath=filepath)
+        elif ext == '.blend':
+            # For .blend files, we need to append objects
+            with bpy.data.libraries.load(filepath) as (data_from, data_to):
+                data_to.objects = data_from.objects[:]
+            
+            # Link objects to the scene
+            for obj in data_to.objects:
+                if obj is not None:
+                    bpy.context.collection.objects.link(obj)
+        else:
+            print(f"Unsupported file type: {ext}")
+            return
+            
+        print(f"Successfully imported: {filepath}")
+        
+    except Exception as e:
+        print(f"Error during import of {filepath}: {str(e)}")
+        raise
 
 # Function to stick object to the ground
 def stick_object_to_ground(object):

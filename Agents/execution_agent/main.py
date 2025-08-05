@@ -8,6 +8,7 @@ agent = ExecutionAgent()
 
 class RunScriptRequest(BaseModel):
     script_path: str
+    capture_views: bool = True  # Add this parameter with default True
 
 class RunScriptResponse(BaseModel):
     ok: bool
@@ -18,7 +19,7 @@ class RunScriptResponse(BaseModel):
 async def run_script(req: RunScriptRequest):
     try:
         # use socket to send the script to Blender
-        res = agent.execute_codes_file(req.script_path)
+        res = agent.execute_codes_file(req.script_path, capture_views=req.capture_views)
         
         if res is None:
             return RunScriptResponse(

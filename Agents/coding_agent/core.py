@@ -17,7 +17,7 @@ class CodingAgent:
             raise RuntimeError("Missing ANTHROPIC_API_KEY environment variable")
         
         self.client = Anthropic(api_key=api_key)
-        self.model = "claude-opus-4-20250514"
+        self.model = "claude-3-5-sonnet-20241022"
         
         # Path to execution_code.py in project root
         self.project_root = Path(__file__).parent.parent.parent

@@ -4,7 +4,8 @@
       "func": "clear_scene",
       "editable_params": {},
       "task_description": "Clear the current scene to start fresh.",
-      "edit_hints": "If the scene is not empty, need to run clear_scene() again."
+      "edit_hints": "If the scene is not empty, need to run clear_scene() again.",
+      "review_agent_status": false
     },
     "2": {
       "func": "add_ground",
@@ -12,7 +13,8 @@
         "size": 100
       },
       "task_description": "Add a ground plane to the scene so that objects can be stick to it. A default size of 100 is used, it should be large enough to accommodate all objects.",
-      "edit_hints": "If a ground is not created, need to run add_ground() again."
+      "edit_hints": "If a ground is not created, need to run add_ground() again.",
+      "review_agent_status": false
     },
     "3": {
       "func": "import_object",
@@ -20,7 +22,8 @@
         "filepath": "{{DYNAMIC}}"
       },
       "task_description": "Import house model into the scene.",
-      "edit_hints": "Check if the house object is properly imported and visible."
+      "edit_hints": "Check if the house object is properly imported and visible.",
+      "review_agent_status": false
     },
     "4": {
       "func": "stick_object_to_ground",
@@ -28,7 +31,17 @@
         "object": "house"
       },
       "task_description": "Stick the house object to the ground plane.",
-      "edit_hints": "If the house is not properly grounded or appears to be floating, check if the object name is correct and if the ground object exists."
+      "edit_hints": "If the house is not properly grounded or appears to be floating, check if the object name is correct and if the ground object exists.",
+      "review_agent_status": false
+    },
+        "5": {
+      "func": "import_multiple_objects",
+      "editable_params": {
+        "objects": "{{DYNAMIC}}"
+      },
+      "task_description": "Import all remaining objects (trees, cars, etc.) from the combination into the scene.",
+      "edit_hints": "Check if all objects are properly imported. Each object should be visible and have a unique name.",
+      "review_agent_status": false
     }
   }
 }
