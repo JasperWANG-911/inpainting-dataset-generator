@@ -13,7 +13,7 @@ class ReviewingAgent:
         if not api_key:
             raise RuntimeError("Missing ANTHROPIC_API_KEY environment variable")
         self.client = Anthropic(api_key=api_key)
-        self.model = "claude-opus-4-20250514"   # change model name if needed
+        self.model = "claude-3-sonnet-20240229"   # change model name if needed
 
     def _load_reviewing_images_as_messages(self) -> list:
         """
@@ -21,9 +21,9 @@ class ReviewingAgent:
         Images are named: top.png, front.png, back.png, left.png, right.png
         Convert them to Base64 and return as message format.
         """
-        # Fix the path - remove extra "impainting_dataset_generator" 
+        # Fix the path - remove extra "imnainting_dataset_generator" 
         base_dir = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "..", "..", "impainting_dataset_generator", "reviewing_images")
+            os.path.join(os.path.dirname(__file__), "..", "..", "reviewing_images")
         )
         
         # Create directory if it doesn't exist

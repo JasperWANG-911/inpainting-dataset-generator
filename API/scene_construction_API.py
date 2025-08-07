@@ -335,7 +335,8 @@ def capture_scene_views():
     import os
     
     # Create output directory if it doesn't exist
-    output_dir = r"C:\Users\Jasper\Desktop\inpainting-dataset-generator\impainting_dataset_generator\reviewing_images"
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    output_dir = os.path.join(project_root, "reviewing_images")
     os.makedirs(output_dir, exist_ok=True)
     
     # Store original camera and create a new one for capturing

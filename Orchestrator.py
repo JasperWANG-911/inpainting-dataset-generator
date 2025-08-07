@@ -3,15 +3,14 @@ import json
 import time
 import asyncio
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 import logging
 import os
 
 class Orchestrator:
     """Main orchestrator that coordinates all agents"""
     
-    
-    def __init__(self):
+    def __init__(self, enable_review: bool = True, review_only_steps: Optional[Set[str]] = None):
         self.agents = {
             "execution": "http://localhost:8001",
             "reviewing": "http://localhost:8002", 
@@ -19,10 +18,20 @@ class Orchestrator:
             "coding": "http://localhost:8004"
         }
         self.project_root = Path(__file__).parent
-        self.workflow_config = self._load_workflow_config()
         self.logger = self._setup_logger()
         self.timeout = httpx.Timeout(60, connect=10.0)
         self.current_combination = None
+        self.total_steps = 0
+        self.reviewing_images_dir = self.project_root / "reviewing_images"
+        self.reviewing_images_dir.mkdir(exist_ok=True)  
+        
+        # Review control
+        self.enable_review = enable_review
+        # Steps that always need review (even in testing)
+        self.review_only_steps = review_only_steps or {"scale_objects", "adjust_scales"}
+        
+        # Steps that never need review
+        self.skip_review_steps = {"clear_scene", "add_ground", "capture_scene_views"}
         
     def _setup_logger(self):
         logger = logging.getLogger('Orchestrator')
@@ -32,14 +41,15 @@ class Orchestrator:
         handler.setFormatter(formatter)
         logger.addHandler(handler)
         return logger
-        
-    def _load_workflow_config(self):
-        with open("workflow_config.json", "r") as f:
-            return json.load(f)
     
     async def check_agents_health(self):
         """Check if all agents are running"""
         for name, url in self.agents.items():
+            # Skip review agent if disabled
+            if name == "reviewing" and not self.enable_review:
+                self.logger.info(f"✓ {name} agent skipped (review disabled)")
+                continue
+                
             try:
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
                     response = await client.get(f"{url}/health")
@@ -80,101 +90,106 @@ class Orchestrator:
             
         self.logger.info(f"Scene planning successful. Generated {result['total_combinations']} combinations")
         return result
-    def _update_import_step(self, step_config: dict, combination: Dict, step_num: int) -> dict:
-        """Update import step with actual file paths from combination"""
-        # Create a copy of step config to avoid modifying the original
-        updated_config = step_config.copy()
+    
+    async def set_combination_in_coding_agent(self, combination: Dict):
+        """Send combination data to coding agent"""
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{self.agents['coding']}/set-combination",
+                json={"combination": combination}
+            )
         
-        # Map step numbers to object types (adjust based on your workflow)
-        step_to_object_type = {
-            3: "house",  # Step 3 imports house
-            4: "tree",   # Step 4 imports first tree
-            5: "tree"    # Step 5 imports second tree (if exists)
-        }
+        result = response.json()
+        if not result["success"]:
+            raise RuntimeError(f"Failed to set combination data: {result.get('message')}")
         
-        if step_num in step_to_object_type:
-            object_type = step_to_object_type[step_num]
-            
-            # Find objects of this type in combination
-            matching_objects = [obj for obj in combination["objects"] if obj["type"] == object_type]
-            
-            if matching_objects:
-                # For house, use the first one; for trees, use based on step number
-                if object_type == "house":
-                    obj = matching_objects[0]
-                else:
-                    # For trees, use index based on step number
-                    tree_index = step_num - 4  # Step 4 -> index 0, Step 5 -> index 1
-                    if tree_index < len(matching_objects):
-                        obj = matching_objects[tree_index]
-                    else:
-                        return updated_config
-                
-                # DEBUG: Print file path information
-                self.logger.info(f"DEBUG: Original file path from combination: {obj['file_path']}")
-                
-                # Convert to absolute path
-                filepath = obj["file_path"]
-                if not os.path.isabs(filepath):
-                    # Make it absolute relative to project root
-                    filepath = os.path.abspath(os.path.join(self.project_root, filepath))
-                
-                self.logger.info(f"DEBUG: Absolute file path: {filepath}")
-                self.logger.info(f"DEBUG: File exists: {os.path.exists(filepath)}")
-                
-                # Update the filepath parameter
-                updated_config["editable_params"] = {
-                    "filepath": filepath
-                }
-                
-                # Update task description to be more specific
-                updated_config["task_description"] = f"Import {obj['type']} ({obj['file_name']}) into the scene."
-                
-                self.logger.info(f"Updated step {step_num} with filepath: {filepath}")
+        self.logger.info("Combination data sent to coding agent")
+    
+    def _should_review_step(self, step_num: int, step_description: str) -> bool:
+        """Determine if a step should be reviewed"""
+        # If review is globally disabled
+        if not self.enable_review:
+            # But check if this is a critical step that always needs review
+            for critical_step in self.review_only_steps:
+                if critical_step.lower() in step_description.lower():
+                    self.logger.info(f"Step {step_num} requires review (critical step: {critical_step})")
+                    return True
+            return False
         
-        return updated_config
+        # If review is enabled, check if this step should be skipped
+        for skip_step in self.skip_review_steps:
+            if skip_step.lower() in step_description.lower():
+                return False
+        
+        return True
+    
+    async def get_step_info(self, step_num: int) -> Dict:
+        """Get information about a specific step from the generated code"""
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{self.agents['coding']}/get-step-info",
+                json={"step": step_num}
+            )
+        
+        return response.json()
     
     async def execute_workflow_steps(self, combination: Dict):
         """Execute all workflow steps with review loop"""
-        total_steps = len(self.workflow_config["steps"])
+        # First, send combination data to coding agent
+        await self.set_combination_in_coding_agent(combination)
         
-        for step_num in range(1, total_steps + 1):
-            self.logger.info(f"\n--- Executing Step {step_num}/{total_steps} ---")
+        # Generate complete code on step 1
+        self.logger.info("Generating complete scene construction code...")
+        
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{self.agents['coding']}/generate-code",
+                json={
+                    "step": 1,
+                    "task_description": "Generate complete scene construction code with intelligent scaling",
+                    "review_result": None
+                }
+            )
+        
+        code_result = response.json()
+        if not code_result["success"]:
+            self.logger.error(f"Code generation failed: {code_result['message']}")
+            return False
+        
+        self.total_steps = code_result.get("total_steps", 0)
+        self.logger.info(f"Generated code with {self.total_steps} steps")
+        
+        # Execute each step
+        for step_num in range(1, self.total_steps + 1):
+            self.logger.info(f"\n--- Executing Step {step_num}/{self.total_steps} ---")
             
-            step_config = self.workflow_config["steps"][str(step_num)]
-            task_description = step_config["task_description"]
-            
-            # Dynamically update parameters for import steps
-            if step_config["func"] == "import_object" and "{{DYNAMIC}}" in str(step_config.get("editable_params", {})):
-                # Find the corresponding object from combination
-                step_config = self._update_import_step(step_config, combination, step_num)
+            # Get step information
+            step_info = await self.get_step_info(step_num)
+            step_description = step_info.get("description", f"Step {step_num}")
             
             max_retries = 3
             retry_count = 0
             review_result = None
             
             while retry_count < max_retries:
-                # Generate/update code for this step
-                self.logger.info(f"Generating code for step {step_num}...")
-                
-                # Pass the updated step config to coding agent
-                async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    response = await client.post(
-                        f"{self.agents['coding']}/generate-code",
-                        json={
-                            "step": step_num,
-                            "task_description": task_description,
-                            "review_result": review_result,
-                            "step_config": step_config  # Pass the complete step config
-                        }
-                    )
-                
-                code_result = response.json()
-                if not code_result["success"]:
-                    self.logger.error(f"Code generation failed: {code_result['message']}")
-                    return False
-                
-                self.logger.info(f"Code generated: {code_result['message']}")
+                # For steps after 1, we may need to fix based on review
+                if step_num > 1 and review_result and not review_result.get("ok", False):
+                    self.logger.info(f"Fixing step {step_num} based on review feedback...")
+                    
+                    async with httpx.AsyncClient(timeout=self.timeout) as client:
+                        response = await client.post(
+                            f"{self.agents['coding']}/generate-code",
+                            json={
+                                "step": step_num,
+                                "task_description": step_description,
+                                "review_result": review_result
+                            }
+                        )
+                    
+                    code_result = response.json()
+                    if not code_result["success"]:
+                        self.logger.error(f"Code fix failed: {code_result['message']}")
+                        return False
                 
                 # Execute the code in Blender
                 self.logger.info("Executing code in Blender...")
@@ -194,18 +209,26 @@ class Orchestrator:
                 self.logger.info("Code executed successfully")
                 
                 # Wait for Blender to update the scene
-                await asyncio.sleep(3)
+                await asyncio.sleep(2)
+                
+                # Determine if this step needs review
+                if not self._should_review_step(step_num, step_description):
+                    self.logger.info(f"✓ Step {step_num} completed (review skipped)")
+                    break
                 
                 # Review the step
                 self.logger.info(f"Reviewing step {step_num}...")
+                
+                # First capture current scene views
+                await self._capture_scene_views()
                 
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
                     response = await client.post(
                         f"{self.agents['reviewing']}/review",
                         json={
                             "step": step_num,
-                            "description": task_description,
-                            "edit_hint": step_config.get("edit_hints", "")
+                            "description": step_description,
+                            "edit_hint": "Check if objects are properly sized and positioned. Trees should be proportional to the house."
                         }
                     )
                 
@@ -226,6 +249,38 @@ class Orchestrator:
         
         return True
     
+    async def _capture_scene_views(self):
+        """Trigger scene view capture through execution agent"""
+        capture_code = """
+import bpy
+import math
+import os
+
+# Add API path
+import sys
+sys.path.append(r'""" + str(self.project_root) + """')
+from API.scene_construction_API import capture_scene_views
+
+# Capture views
+capture_scene_views()
+"""
+        
+        # Write temporary capture script
+        temp_script = self.project_root / "temp_capture.py"
+        with open(temp_script, 'w') as f:
+            f.write(capture_code)
+        
+        # Execute capture
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{self.agents['execution']}/run-script",
+                json={"script_path": str(temp_script)}
+            )
+        
+        # Clean up
+        if temp_script.exists():
+            temp_script.unlink()
+    
     async def generate_scene_for_combination(self, combination: Dict, combination_num: int):
         """Generate scene for a single combination"""
         self.logger.info(f"\n{'='*60}")
@@ -241,7 +296,7 @@ class Orchestrator:
             execution_code_path.unlink()
             self.logger.info("Cleared existing execution_code.py")
         
-        # Store combination data for coding agent to access
+        # Store combination data
         self.current_combination = combination
         
         # Execute workflow steps with combination data
@@ -262,6 +317,9 @@ class Orchestrator:
         self.logger.info(f"Description: {description}")
         self.logger.info(f"Assets CSV: {assets_csv_path}")
         self.logger.info(f"Number of combinations: {num_combinations}")
+        self.logger.info(f"Review enabled: {self.enable_review}")
+        if not self.enable_review:
+            self.logger.info(f"Review-only steps: {self.review_only_steps}")
         
         # Check all agents are healthy
         self.logger.info("\nChecking agent health...")
@@ -300,11 +358,16 @@ class Orchestrator:
         self.logger.info("="*80)
 
 async def main():
-    orchestrator = Orchestrator()
+    # Create orchestrator with review disabled for testing
+    # Only enable review for scaling steps
+    orchestrator = Orchestrator(
+        enable_review=False,  # Disable general review
+        review_only_steps={"scale"}  # Only review scaling/adjustment steps
+    )
     
     # Example usage - you can modify these parameters
     description = "A house with 2 trees"
-    assets_csv_path = "assets/assets.csv"  # Updated path to assets folder
+    assets_csv_path = "assets/assets.csv"
     num_combinations = 1
     
     # Verify assets.csv exists

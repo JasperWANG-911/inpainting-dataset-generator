@@ -9,7 +9,7 @@ class ExecutionAgent:
     ExecutionAgent, to execute code in Blender.
     """
     
-    def __init__(self, host='localhost', port=8089, timeout=60):  # Increased timeout to 60 seconds
+    def __init__(self, host='localhost', port=8089, timeout=60):
         """
         initialize the ExecutionAgent. Need to run blender_server.py first.
         """
@@ -17,7 +17,7 @@ class ExecutionAgent:
         self.port = port
         self.timeout = timeout
         self.logger = self._setup_logger()
-        self.project_root = Path(__file__).parent.parent.parent  # Fixed path
+        self.project_root = Path(__file__).parent.parent.parent
     
     def _setup_logger(self):
         """Set up the logger."""
@@ -129,24 +129,6 @@ class ExecutionAgent:
             self.logger.error(f"Connection test failed: {e}")
             return False
     
-    def execute_blender_script(self, script_path):
-        """
-        Execute a Blender script file
-        """
-        try:
-            with open(script_path, 'r', encoding='utf-8') as f:
-                code = f.read()
-
-            self.logger.info(f"Executing script file: {script_path}")
-            return self.execute_code(code)
-            
-        except FileNotFoundError:
-            self.logger.error(f"Script file not found: {script_path}")
-            return None
-        except Exception as e:
-            self.logger.error(f"Failed to read script file: {e}")
-            return None
-    
     def execute_codes_file(self, file_path: str, capture_views: bool = True):
         if not os.path.isabs(file_path):
             file_path = self.project_root / file_path
@@ -163,79 +145,83 @@ class ExecutionAgent:
         # Execute the main code
         result = self.execute_code(code)
         
-        # After successful execution, capture scene views for reviewing (only if capture_views is True)
+        # After successful execution, capture scene views for reviewing
         if result and result.get('status') == 'success' and capture_views:
             self.logger.info("Capturing scene views for review...")
             
-            # Code to capture views
-            capture_code = """
-    import bpy
-    import math
-    import os
+            # Create reviewing_images directory if it doesn't exist
+            reviewing_dir = self.project_root / "reviewing_images"
+            reviewing_dir.mkdir(exist_ok=True)
+            
+            # Code to capture views with hardcoded path
+            capture_code = f"""
+import bpy
+import math
+import os
 
-    # Create output directory if it doesn't exist
-    output_dir = r"D:\\Python Projects\\inpainting-dataset-generator\\reviewing_images"
-    os.makedirs(output_dir, exist_ok=True)
+# Use hardcoded path
+output_dir = r"{str(reviewing_dir)}"
+print(f"Saving images to: {{output_dir}}")
 
-    # Store original camera and create a new one for capturing
-    original_camera = bpy.context.scene.camera
+# Store original camera and create a new one for capturing
+original_camera = bpy.context.scene.camera
 
-    # Create a new camera if none exists
-    if not original_camera:
-        bpy.ops.object.camera_add(location=(0, 0, 0))
-        camera = bpy.context.active_object
-        bpy.context.scene.camera = camera
-    else:
-        camera = original_camera
+# Create a new camera if none exists
+if not original_camera:
+    bpy.ops.object.camera_add(location=(0, 0, 0))
+    camera = bpy.context.active_object
+    bpy.context.scene.camera = camera
+else:
+    camera = original_camera
 
-    # Set render resolution
-    bpy.context.scene.render.resolution_x = 800
-    bpy.context.scene.render.resolution_y = 600
+# Set render resolution
+bpy.context.scene.render.resolution_x = 800
+bpy.context.scene.render.resolution_y = 600
 
-    # Define camera positions for 5 views
-    views = {
-        'top': {
-            'location': (0, 0, 10),
-            'rotation': (0, 0, 0)
-        },
-        'front': {
-            'location': (0, -10, 2),
-            'rotation': (math.radians(80), 0, 0)
-        },
-        'back': {
-            'location': (0, 10, 2),
-            'rotation': (math.radians(80), 0, math.radians(180))
-        },
-        'left': {
-            'location': (-10, 0, 2),
-            'rotation': (math.radians(80), 0, math.radians(-90))
-        },
-        'right': {
-            'location': (10, 0, 2),
-            'rotation': (math.radians(80), 0, math.radians(90))
-        }
-    }
+# Define camera positions for 5 views
+views = {{
+    'top': {{
+        'location': (0, 0, 100),
+        'rotation': (0, 0, 0)
+    }},
+    'front': {{
+        'location': (0, -100, 2),
+        'rotation': (math.radians(80), 0, 0)
+    }},
+    'back': {{
+        'location': (0, 100, 2),
+        'rotation': (math.radians(80), 0, math.radians(180))
+    }},
+    'left': {{
+        'location': (-100, 0, 2),
+        'rotation': (math.radians(80), 0, math.radians(-90))
+    }},
+    'right': {{
+        'location': (100, 0, 2),
+        'rotation': (math.radians(80), 0, math.radians(90))
+    }}
+}}
 
-    # Capture each view
-    for view_name, view_data in views.items():
-        # Set camera position and rotation
-        camera.location = view_data['location']
-        camera.rotation_euler = view_data['rotation']
-        
-        # Set output path
-        output_path = os.path.join(output_dir, f"{view_name}.png")
-        bpy.context.scene.render.filepath = output_path
-        
-        # Render the image
-        bpy.ops.render.render(write_still=True)
-        print(f"Captured {view_name} view: {output_path}")
+# Capture each view
+for view_name, view_data in views.items():
+    # Set camera position and rotation
+    camera.location = view_data['location']
+    camera.rotation_euler = view_data['rotation']
+    
+    # Set output path
+    output_path = os.path.join(output_dir, f"{{view_name}}.png")
+    bpy.context.scene.render.filepath = output_path
+    
+    # Render the image
+    bpy.ops.render.render(write_still=True)
+    print(f"Captured {{view_name}} view: {{output_path}}")
 
-    # Restore original camera if we created a new one
-    if not original_camera:
-        bpy.data.objects.remove(camera, do_unlink=True)
+# Restore original camera if we created a new one
+if not original_camera:
+    bpy.data.objects.remove(camera, do_unlink=True)
 
-    print("Scene capture completed")
-    """
+print("Scene capture completed")
+"""
             
             capture_result = self.execute_code(capture_code)
             if capture_result and capture_result.get('status') == 'success':
@@ -243,7 +229,9 @@ class ExecutionAgent:
             else:
                 self.logger.warning("Failed to capture scene views")
         elif not capture_views:
-            self.logger.info("Scene capture skipped (review disabled for this step)")
+            self.logger.info("Scene capture skipped (capture_views=False)")
+
+        self.logger.info(f"Code being executed:\n{code[:500]}...")
         
         return result
 
