@@ -172,8 +172,22 @@ class Orchestrator:
             review_result = None
             
             while retry_count < max_retries:
-                # For steps after 1, we may need to fix based on review
-                if step_num > 1 and review_result and not review_result.get("ok", False):
+                # Get the code for this specific step
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    response = await client.post(
+                        f"{self.agents['coding']}/get-step-code",
+                        json={"step": step_num}
+                    )
+                
+                step_code_result = response.json()
+                if not step_code_result["success"]:
+                    self.logger.error(f"Failed to get code for step {step_num}")
+                    return False
+                
+                step_code = step_code_result["code"]
+                
+                # For steps after 1 with failed review, fix the code
+                if review_result and not review_result.get("ok", False):
                     self.logger.info(f"Fixing step {step_num} based on review feedback...")
                     
                     async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -190,23 +204,43 @@ class Orchestrator:
                     if not code_result["success"]:
                         self.logger.error(f"Code fix failed: {code_result['message']}")
                         return False
+                    
+                    # Get the updated step code
+                    async with httpx.AsyncClient(timeout=self.timeout) as client:
+                        response = await client.post(
+                            f"{self.agents['coding']}/get-step-code",
+                            json={"step": step_num}
+                        )
+                    
+                    step_code_result = response.json()
+                    if not step_code_result["success"]:
+                        self.logger.error(f"Failed to get updated code for step {step_num}")
+                        return False
+                    
+                    step_code = step_code_result["code"]
                 
-                # Execute the code in Blender
-                self.logger.info("Executing code in Blender...")
+                # Execute only this step's code in Blender
+                self.logger.info(f"Executing step {step_num} code in Blender...")
+                
+                # Determine if we need to capture views after this step
+                capture_views = self._should_review_step(step_num, step_description)
                 
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
                     response = await client.post(
-                        f"{self.agents['execution']}/run-script",
-                        json={"script_path": code_result["code_path"]}
+                        f"{self.agents['execution']}/run-step-code",
+                        json={
+                            "code": step_code,
+                            "capture_views": capture_views
+                        }
                     )
                 
                 exec_result = response.json()
                 if not exec_result.get("ok", False):
                     error_msg = exec_result.get('error') or exec_result.get('result', {}).get('error', 'Unknown error')
-                    self.logger.error(f"Code execution failed: {error_msg}")
+                    self.logger.error(f"Step {step_num} execution failed: {error_msg}")
                     return False
                 
-                self.logger.info("Code executed successfully")
+                self.logger.info(f"Step {step_num} executed successfully")
                 
                 # Wait for Blender to update the scene
                 await asyncio.sleep(2)
@@ -218,9 +252,6 @@ class Orchestrator:
                 
                 # Review the step
                 self.logger.info(f"Reviewing step {step_num}...")
-                
-                # First capture current scene views
-                await self._capture_scene_views()
                 
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
                     response = await client.post(

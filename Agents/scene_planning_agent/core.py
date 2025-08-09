@@ -118,9 +118,15 @@ Only include what's explicitly mentioned. Keep it simple."""
                 selected = random.choices(available, k=obj['quantity'])
                 
                 for idx, file_info in enumerate(selected):
+                    # Special case: if object type is 'house' and quantity is 1, use 'house' as instance_id
+                    if obj['name'] == 'house' and obj['quantity'] == 1:
+                        instance_id = 'house'
+                    else:
+                        instance_id = f"{obj['name']}_{idx + 1}"
+                    
                     combo['objects'].append({
                         'type': obj['name'],
-                        'instance_id': f"{obj['name']}_{idx + 1}",
+                        'instance_id': instance_id,
                         'file_path': file_info['file_path'],
                         'file_name': file_info['file_name']
                     })

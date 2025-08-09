@@ -72,40 +72,38 @@ class CodingAgent:
         # Build prompt for Claude with emphasis on intelligent scaling
         prompt = f"""Generate complete Blender Python code to construct a scene with the following objects:
 
-{json.dumps(fixed_combination, indent=2)}
+    {json.dumps(fixed_combination, indent=2)}
 
-Available API functions:
-{self.api_reference}
+    Available API functions:
+    {self.api_reference}
 
-Requirements:
-1. Start by clearing the scene and adding a ground plane (size 100)
-2. Import the house first (if present) and stick it to the ground
-3. For each other object:
-   - Import it
-   - INTELLIGENTLY SCALE it based on common sense proportions relative to the house
-   - Place it using place_object_avoiding_collision
-4. Use object instance_ids as names in Blender
-5. End by capturing scene views
+    Requirements:
+    1. Start by clearing the scene and adding a ground plane (size 100)
+    2. Import the house first (if present) and stick it to the ground
+    3. For each other object:
+    - Import it
+    - Scale it based on INITIAL ESTIMATES (not review feedback, as no review has happened yet)
+    - Place it around the house using place_single_object_around_house()
+    4. Use object instance_ids as names in Blender
+    5. End by capturing scene views
 
-IMPORTANT SCALING GUIDELINES:
-- Analyze the house's approximate size (typical house is 10-15 meters)
-- Scale trees to be realistic relative to the house (typically 0.5x to 1.5x house height)
-- Scale cars to be realistic (typically 1/3 to 1/2 house length)
-- Scale smaller objects appropriately (trash cans ~1m, benches ~1.5m, etc.)
-- Add a dedicated scaling step after importing each object type
-- Use the scale_object() function from the API
+    IMPORTANT: This is the INITIAL code generation. You have NOT seen any images yet, so:
+    - Do NOT mention anything about objects being "too large" or "too small" based on review
+    - Do NOT say "based on review feedback" 
+    - Simply make reasonable initial estimates for scaling
 
-Include clear step comments like:
-# Step 1: Clear scene
-# Step 2: Add ground
-# Step 3: Import house
-# Step 4: Stick house to ground
-# Step 5: Import tree_1
-# Step 6: Scale tree_1 appropriately
-# Step 7: Place tree_1
-etc.
 
-Output only the Python code without markdown formatting."""
+    Example comments for scaling steps:
+    # Step 6: Scale tree_1
+    # Starting with scale factor 1.0
+    scale_object("tree_1", 1.0)
+
+    NOT:
+    # Based on review feedback, the tree is 2x too large...  (WRONG - no review has happened yet!)
+
+    Include clear step comments but keep them factual about what you're doing, not why.
+
+    Output only the Python code without markdown formatting."""
 
         response = self.client.messages.create(
             model=self.model,
@@ -147,6 +145,34 @@ Output only the Python code without markdown formatting."""
             "description": self.step_descriptions.get(step, f"Step {step}"),
             "is_scale_step": "scale" in self.step_descriptions.get(step, "").lower()
         }
+    
+    def get_step_code(self, step: int) -> Optional[str]:
+        """Extract only the code for a specific step"""
+        if not self.generated_code:
+            return None
+            
+        current_code = self._read_current_code()
+        step_code = self._extract_step_from_code(current_code, step)
+        
+        if step_code:
+            # Add necessary imports and setup for this step
+            imports = """import bpy
+import math
+import random
+from mathutils import Vector
+import sys
+import os
+
+# Add API path and import functions
+sys.path.append(r'{}')
+from API.scene_construction_API import *
+
+""".format(self.project_root)
+            
+            # Return just the step code with imports
+            return imports + step_code
+        
+        return None
     
     def _extract_step_from_code(self, code: str, step_num: int) -> Optional[str]:
         """Extract a specific step from the complete code"""
@@ -262,25 +288,31 @@ Output only the Python code without markdown formatting."""
         current_code = self._read_current_code()
         current_step_code = self._extract_step_from_code(current_code, step)
         
-        # Check if this is a scaling step
-        is_scale_step = "scale" in task_description.lower()
+        # Check if object is not visible
+        if "not visible" in review_comment.lower():
+            # Extract object name from the step
+            import re
+            object_match = re.search(r'["\']([\w_]+)["\']', current_step_code)
+            if object_match:
+                object_name = object_match.group(1)
+                
+                # Generate code to use place_single_object_around_house
+                prompt = f"""The object {object_name} is not visible, likely inside the house.
+    Generate code for this step that uses place_single_object_around_house() instead of the current placement method.
+
+    Current code:
+    {current_step_code}
+
+    Generate only the fixed code that places the object around the house safely.
+    Output only the Python code without markdown formatting."""
+            else:
+                # Fallback to regular fix
+                prompt = self._build_fix_prompt(current_step_code, task_description, review_comment)
+        else:
+            # Regular scaling or other fixes
+            prompt = self._build_fix_prompt(current_step_code, task_description, review_comment)
         
-        prompt = f"""Fix the following Blender Python code based on the review feedback:
-
-Current code:
-{current_step_code}
-
-Task description: {task_description}
-Review comment: {review_comment}
-
-Available API functions:
-{self.api_reference}
-
-{"IMPORTANT: This is a scaling step. Adjust the scale factor based on the review comment to make the object proportional to the house." if is_scale_step else ""}
-
-Generate only the fixed code for this step, maintaining the same comment format.
-Output only the Python code without markdown formatting."""
-
+        # Get response from Claude
         response = self.client.messages.create(
             model=self.model,
             max_tokens=500,
@@ -297,6 +329,29 @@ Output only the Python code without markdown formatting."""
             fixed_code = re.sub(r'\n?```$', '', fixed_code)
         
         return fixed_code
+
+    def _build_fix_prompt(self, current_step_code: str, task_description: str, review_comment: str) -> str:
+        """Build the prompt for fixing code"""
+        # Check if this is a scaling step
+        is_scale_step = "scale" in task_description.lower()
+        
+        prompt = f"""Fix the following Blender Python code based on the review feedback:
+
+    Current code:
+    {current_step_code}
+
+    Task description: {task_description}
+    Review comment: {review_comment}
+
+    Available API functions:
+    {self.api_reference}
+
+    {"IMPORTANT: This is a scaling step. Adjust the scale factor based on the review comment to make the object proportional to the house. Remember that scale_object uses absolute scaling, not relative." if is_scale_step else ""}
+
+    Generate only the fixed code for this step, maintaining the same comment format.
+    Output only the Python code without markdown formatting."""
+        
+        return prompt
     
     def _replace_step_in_code(self, full_code: str, step_num: int, new_step_code: str) -> str:
         """Replace a specific step in the full code"""

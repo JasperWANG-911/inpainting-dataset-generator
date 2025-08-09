@@ -6,6 +6,7 @@ from core import CodingAgent
 app = FastAPI(title="Coding Agent")
 agent = CodingAgent()
 
+# Request/Response Models
 class SetCombinationRequest(BaseModel):
     combination: Dict
 
@@ -34,6 +35,15 @@ class GetStepInfoResponse(BaseModel):
     description: str
     is_scale_step: bool
 
+class GetStepCodeRequest(BaseModel):
+    step: int
+
+class GetStepCodeResponse(BaseModel):
+    success: bool
+    code: Optional[str] = None
+    message: Optional[str] = None
+
+# API Endpoints
 @app.post("/set-combination", response_model=SetCombinationResponse)
 async def set_combination(req: SetCombinationRequest):
     try:
@@ -63,6 +73,23 @@ async def get_step_info(req: GetStepInfoRequest):
     try:
         info = agent.get_step_info(req.step)
         return GetStepInfoResponse(**info)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/get-step-code", response_model=GetStepCodeResponse)
+async def get_step_code(req: GetStepCodeRequest):
+    try:
+        code = agent.get_step_code(req.step)
+        if code:
+            return GetStepCodeResponse(
+                success=True,
+                code=code
+            )
+        else:
+            return GetStepCodeResponse(
+                success=False,
+                message=f"No code found for step {req.step}"
+            )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

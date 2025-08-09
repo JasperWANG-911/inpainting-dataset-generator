@@ -234,6 +234,43 @@ print("Scene capture completed")
         self.logger.info(f"Code being executed:\n{code[:500]}...")
         
         return result
+    
+    def execute_step_code(self, code: str, capture_views: bool = False):
+        """Execute specific step code directly"""
+        self.logger.info(f"Executing step code (length: {len(code)} chars)")
+        self.logger.debug(f"Code preview: {code[:200]}...")
+        
+        # Execute the code
+        result = self.execute_code(code)
+        
+        # Optionally capture views after this step
+        if result and result.get('status') == 'success' and capture_views:
+            self.logger.info("Capturing scene views for review...")
+            
+            # Create reviewing_images directory if it doesn't exist
+            reviewing_dir = self.project_root / "reviewing_images"
+            reviewing_dir.mkdir(exist_ok=True)
+            
+            # Capture views code...
+            capture_code = f"""
+    import bpy
+    import math
+    import os
+
+    # Use hardcoded path
+    output_dir = r"{str(reviewing_dir)}"
+    print(f"Saving images to: {{output_dir}}")
+
+    # ... (rest of capture code)
+    """
+            
+            capture_result = self.execute_code(capture_code)
+            if capture_result and capture_result.get('status') == 'success':
+                self.logger.info("Scene views captured successfully")
+            else:
+                self.logger.warning("Failed to capture scene views")
+        
+        return result
 
 # demo_usage:
 if __name__ == "__main__":

@@ -15,6 +15,40 @@ class RunScriptResponse(BaseModel):
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
 
+class RunStepCodeRequest(BaseModel):
+    code: str
+    capture_views: bool = False
+
+class RunStepCodeResponse(BaseModel):
+    ok: bool
+    result: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+
+@app.post("/run-step-code", response_model=RunStepCodeResponse)
+async def run_step_code(req: RunStepCodeRequest):
+    try:
+        res = agent.execute_step_code(req.code, capture_views=req.capture_views)
+        
+        if res is None:
+            return RunStepCodeResponse(
+                ok=False, 
+                error="Execution failed or returned no result",
+                result=None
+            )
+        
+        return RunStepCodeResponse(
+            ok=res.get("status") == "success", 
+            result=res,
+            error=res.get("error") if res.get("status") != "success" else None
+        )
+        
+    except Exception as e:
+        return RunStepCodeResponse(
+            ok=False,
+            error=f"Unexpected error: {str(e)}",
+            result=None
+        )
+
 @app.post("/run-script", response_model=RunScriptResponse)
 async def run_script(req: RunScriptRequest):
     try:

@@ -13,7 +13,7 @@ class ReviewingAgent:
         if not api_key:
             raise RuntimeError("Missing ANTHROPIC_API_KEY environment variable")
         self.client = Anthropic(api_key=api_key)
-        self.model = "claude-3-sonnet-20240229"   # change model name if needed
+        self.model = "claude-3-haiku-20240307"   # change model name if needed
 
     def _load_reviewing_images_as_messages(self) -> list:
         """
@@ -90,13 +90,17 @@ class ReviewingAgent:
         content.append({
             "type": "text",
             "text": f"""
-
     Please:
     1. Judge whether this step succeeded (output "ok": true) or failed ("ok": false).
-    2. Provide a concise but actionable "comment" based on this step's edit hint. The edit hint is: {edit_hint}
-    3. Respond with a JSON object ONLY, for example:
-    {{"ok": true, "comment": "The object tree1 should be scale by a factor of 2"}}
-    
+    2. If this is a scaling step and the scale is incorrect, provide a specific scaling factor recommendation.
+    For example: "The tree is too large compared to the house. Current scale appears to be 2x too big. Recommend scale_object('tree_1', 0.5)". 
+    If the object appears 2x too large and was already scaled, recommend the absolute scale from original size. 
+    For example: if tree was scaled 2x and is still too big by half, recommend scale_object('tree_1', 1.0) not 0.5
+    3. If you cannot see the object, provide a comment like "The tree is not visible in the scene."
+    4. Respond with a JSON object ONLY, for example:
+    {{"ok": false, "comment": "The tree is 3x too large. Recommend scale_object('tree_1', 0.3)"}}
+
+    Edit hint: {edit_hint}
     Important: Your response must be valid JSON with "ok" (boolean) and "comment" (string) fields."""
         })
         
