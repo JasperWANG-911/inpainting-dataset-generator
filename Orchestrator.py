@@ -30,7 +30,7 @@ class Orchestrator:
         self.review_only_steps = review_only_steps or {"scale"}
         
         # Steps that never need review
-        self.skip_review_steps = {"clear_scene", "add_ground", "capture_scene_views"}
+        self.skip_review_steps = {"clear_scene", "add_ground", "capture_scene_views", "place_objects_around_house"}
         
     def _setup_logger(self):
         logger = logging.getLogger('Orchestrator')
@@ -118,10 +118,11 @@ class Orchestrator:
         # If review is enabled, check if this step should be skipped
         for skip_step in self.skip_review_steps:
             if skip_step.lower() in step_description.lower():
+                self.logger.info(f"Step {step_num} skipped review (type: {skip_step})")
                 return False
         
         return True
-    
+        
     async def get_step_info(self, step_num: int) -> Dict:
         """Get information about a specific step from the generated code"""
         async with httpx.AsyncClient(timeout=self.timeout) as client:

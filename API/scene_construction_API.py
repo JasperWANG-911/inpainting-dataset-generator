@@ -5,8 +5,6 @@ import random
 import mathutils
 from mathutils import Vector
 
-
-
 # Function to clear the current scene
 def clear_scene():
     bpy.ops.object.select_all(action='SELECT')
@@ -121,86 +119,6 @@ def stick_object_to_ground(object):
     constraint.use_track_normal = True
     constraint.track_axis = 'TRACK_Z'
 
-# Function to move objects to some random position without collision with existing objects
-def place_object_avoiding_collision(new_object_name, excluded_objects=["ground"], max_attempts=100, safety_distance=0.5):
-   # internal function to check if a point is inside a bounding box
-   def is_point_inside_bbox(point, bbox_min, bbox_max):
-       return (bbox_min.x <= point.x <= bbox_max.x and
-               bbox_min.y <= point.y <= bbox_max.y and
-               bbox_min.z <= point.z <= bbox_max.z)
-   
-   # obtain the objects
-   ground = bpy.data.objects.get("ground")
-   new_obj = bpy.data.objects.get(new_object_name)
-   house = bpy.data.objects.get("house")
-
-   # obtain the objects to avoid collisions
-   obstacles = []
-   for obj in bpy.context.scene.objects:
-       if (obj.type == 'MESH' and 
-           obj.name != new_object_name and 
-           obj.name not in excluded_objects):
-           obstacles.append(obj)
-   
-   # obtain the ground's boundary
-   ground_min = Vector([min([v[i] for v in ground.bound_box]) for i in range(3)])
-   ground_max = Vector([max([v[i] for v in ground.bound_box]) for i in range(3)])
-   ground_min = ground.matrix_world @ ground_min
-   ground_max = ground.matrix_world @ ground_max
-   
-   # obtain the house's boundary
-   house_min = None
-   house_max = None
-   if house:
-       house_bbox = [house.matrix_world @ Vector(v) for v in house.bound_box]
-       house_min = Vector([min([v[i] for v in house_bbox]) for i in range(3)])
-       house_max = Vector([max([v[i] for v in house_bbox]) for i in range(3)])
-       # expand the house's boundary to avoid collisions
-       house_min -= Vector((safety_distance, safety_distance, 0))
-       house_max += Vector((safety_distance, safety_distance, 0))
-
-   # obtain the new object's size
-   obj_size = Vector([max([v[i] for v in new_obj.bound_box]) - min([v[i] for v in new_obj.bound_box]) for i in range(3)])
-   
-   # try to place the object
-   for attempt in range(max_attempts):
-       # random position within the ground's boundary
-       x = random.uniform(ground_min.x + obj_size.x/2, ground_max.x - obj_size.x/2)
-       y = random.uniform(ground_min.y + obj_size.y/2, ground_max.y - obj_size.y/2)
-       
-       # if house is present, check if the position is inside the house's bounding box
-       if house and is_point_inside_bbox(Vector((x, y, 0)), house_min, house_max):
-           continue  # skip this position if it's inside the house's bounding box
-       
-       # set the new object's location
-       new_obj.location = Vector((x, y, ground.location.z))
-
-       # obtain the new object's bounding box
-       obj_bbox = [new_obj.matrix_world @ Vector(v) for v in new_obj.bound_box]
-       obj_min = Vector([min([v[i] for v in obj_bbox]) for i in range(3)])
-       obj_max = Vector([max([v[i] for v in obj_bbox]) for i in range(3)])
-
-       # check if the new object's bounding box overlaps with any obstacles
-       collision_found = False
-       for obstacle in obstacles:
-           # obtain the obstacle's bounding box
-           obs_bbox = [obstacle.matrix_world @ Vector(v) for v in obstacle.bound_box]
-           obs_min = Vector([min([v[i] for v in obs_bbox]) for i in range(3)])
-           obs_max = Vector([max([v[i] for v in obs_bbox]) for i in range(3)])
-           
-           # check if the bounding boxes overlap
-           if not (obj_max.x < obs_min.x or obj_min.x > obs_max.x or
-                   obj_max.y < obs_min.y or obj_min.y > obs_max.y):
-               collision_found = True
-               break
-       
-       if not collision_found:
-           # finalize the position
-           stick_object_to_ground(new_object_name)
-           return True
-   
-   return False
-
 # Function to scale an object(must be a mesh)
 def scale_object(object_name, scale_factor):
     obj = bpy.data.objects.get(object_name)
@@ -213,3 +131,245 @@ def scale_object(object_name, scale_factor):
     else:
         print(f"Object {object_name} not found or is not a mesh.")
         return False
+
+# Function to place all objects randomly around the house for occlusion
+# Debug version to test in system
+# Function to place all objects randomly around the house for occlusion
+def place_objects_around_house(excluded_objects=["ground", "house"], 
+                               min_distance=2.0, 
+                               max_distance=15.0, 
+                               cluster_probability=0.3,
+                               max_attempts_per_object=50):
+    """
+    Place all objects randomly around the house for creating occlusion datasets.
+    
+    Args:
+        excluded_objects: List of object names to exclude from repositioning
+        min_distance: Minimum distance from house center (meters)
+        max_distance: Maximum distance from house center (meters)
+        cluster_probability: Probability that an object will be placed near another object
+        max_attempts_per_object: Maximum placement attempts per object
+    """
+    import math
+    
+    # Get house and ground references
+    house = bpy.data.objects.get("house")
+    ground = bpy.data.objects.get("ground")
+    
+    if not house or not ground:
+        print("Error: House or ground not found in scene")
+        return False
+    
+    # Get house bounding box and center
+    house_bbox = [house.matrix_world @ Vector(v) for v in house.bound_box]
+    house_center = sum(house_bbox, Vector()) / len(house_bbox)
+    house_center.z = 0  # Project to ground level
+    
+    # Calculate house dimensions for better placement
+    house_min = Vector([min([v[i] for v in house_bbox]) for i in range(3)])
+    house_max = Vector([max([v[i] for v in house_bbox]) for i in range(3)])
+    house_width = house_max.x - house_min.x
+    house_depth = house_max.y - house_min.y
+    
+    # Adjust min distance based on house size
+    actual_min_distance = min_distance + max(house_width, house_depth) / 2
+    
+    # Get all objects to reposition
+    objects_to_place = []
+    for obj in bpy.context.scene.objects:
+        if (obj.type == 'MESH' and 
+            obj.name not in excluded_objects):
+            objects_to_place.append(obj)
+    
+    if not objects_to_place:
+        print("No objects to place around house")
+        return True
+    
+    # Shuffle objects for random placement order
+    random.shuffle(objects_to_place)
+    
+    # Track placed objects for clustering
+    placed_objects = []
+    
+    # Place each object
+    for obj in objects_to_place:
+        placed = False
+        
+        for attempt in range(max_attempts_per_object):
+            # Decide if this object should cluster near another
+            if placed_objects and random.random() < cluster_probability:
+                # Choose a random already-placed object to cluster near
+                target_obj = random.choice(placed_objects)
+                
+                # Place near the target object
+                angle_offset = random.uniform(0, 2 * math.pi)
+                distance_offset = random.uniform(1.0, 3.0)  # Distance from target object
+                
+                x = target_obj.location.x + distance_offset * math.cos(angle_offset)
+                y = target_obj.location.y + distance_offset * math.sin(angle_offset)
+            else:
+                # Place randomly around house
+                # Use polar coordinates for even distribution
+                angle = random.uniform(0, 2 * math.pi)
+                distance = random.uniform(actual_min_distance, max_distance)
+                
+                # Calculate position
+                x = house_center.x + distance * math.cos(angle)
+                y = house_center.y + distance * math.sin(angle)
+            
+            # Add some randomness to make placement more natural
+            x += random.uniform(-1.0, 1.0)
+            y += random.uniform(-1.0, 1.0)
+            
+            # Set temporary location
+            obj.location = Vector((x, y, ground.location.z))
+            
+            # Get object bounding box at new location
+            obj_bbox = [obj.matrix_world @ Vector(v) for v in obj.bound_box]
+            obj_min = Vector([min([v[i] for v in obj_bbox]) for i in range(3)])
+            obj_max = Vector([max([v[i] for v in obj_bbox]) for i in range(3)])
+            
+            # Check if object is within acceptable distance range
+            dist_to_house = (Vector((x, y, 0)) - house_center).length
+            if dist_to_house < actual_min_distance or dist_to_house > max_distance:
+                continue
+            
+            # Check for collisions with other objects
+            collision_found = False
+            for other_obj in placed_objects:
+                if other_obj == obj:
+                    continue
+                
+                # Get other object's bounding box
+                other_bbox = [other_obj.matrix_world @ Vector(v) for v in other_obj.bound_box]
+                other_min = Vector([min([v[i] for v in other_bbox]) for i in range(3)])
+                other_max = Vector([max([v[i] for v in other_bbox]) for i in range(3)])
+                
+                # Check for overlap
+                if not (obj_max.x < other_min.x or obj_min.x > other_max.x or
+                        obj_max.y < other_min.y or obj_min.y > other_max.y):
+                    collision_found = True
+                    break
+            
+            # Also check collision with house
+            if not collision_found:
+                if not (obj_max.x < house_min.x or obj_min.x > house_max.x or
+                        obj_max.y < house_min.y or obj_min.y > house_max.y):
+                    collision_found = True
+            
+            if not collision_found:
+                # Finalize position
+                stick_object_to_ground(obj.name)
+                
+                # Add random rotation for variety
+                obj.rotation_euler.z = random.uniform(0, 2 * math.pi)
+                
+                placed_objects.append(obj)
+                placed = True
+                print(f"Placed {obj.name} at distance {dist_to_house:.2f}m from house")
+                break
+        
+        if not placed:
+            print(f"Warning: Could not find valid placement for {obj.name} after {max_attempts_per_object} attempts")
+    
+    print(f"Successfully placed {len(placed_objects)}/{len(objects_to_place)} objects around house")
+    return True
+
+
+# Alternative function to place a single object around the house
+def place_single_object_around_house(object_name, 
+                                     min_distance=2.0, 
+                                     max_distance=15.0,
+                                     preferred_angle=None,
+                                     angle_variance=math.pi/4,
+                                     max_attempts=50):
+    """
+    Place a single object around the house at a specific angle or randomly.
+    
+    Args:
+        object_name: Name of the object to place
+        min_distance: Minimum distance from house center
+        max_distance: Maximum distance from house center
+        preferred_angle: Preferred angle in radians (0 = front, pi/2 = left, pi = back, 3*pi/2 = right)
+        angle_variance: Random variance around preferred angle
+        max_attempts: Maximum placement attempts
+    """
+    import math
+    
+    # Get references
+    obj = bpy.data.objects.get(object_name)
+    house = bpy.data.objects.get("house")
+    ground = bpy.data.objects.get("ground")
+    
+    if not obj or not house or not ground:
+        print(f"Error: Required objects not found (obj: {obj}, house: {house}, ground: {ground})")
+        return False
+    
+    # Get house center and dimensions
+    house_bbox = [house.matrix_world @ Vector(v) for v in house.bound_box]
+    house_center = sum(house_bbox, Vector()) / len(house_bbox)
+    house_center.z = 0
+    
+    house_min = Vector([min([v[i] for v in house_bbox]) for i in range(3)])
+    house_max = Vector([max([v[i] for v in house_bbox]) for i in range(3)])
+    house_width = house_max.x - house_min.x
+    house_depth = house_max.y - house_min.y
+    
+    # Adjust min distance
+    actual_min_distance = min_distance + max(house_width, house_depth) / 2
+    
+    for attempt in range(max_attempts):
+        # Calculate angle
+        if preferred_angle is not None:
+            angle = preferred_angle + random.uniform(-angle_variance, angle_variance)
+        else:
+            angle = random.uniform(0, 2 * math.pi)
+        
+        # Calculate distance
+        distance = random.uniform(actual_min_distance, max_distance)
+        
+        # Calculate position
+        x = house_center.x + distance * math.cos(angle)
+        y = house_center.y + distance * math.sin(angle)
+        
+        # Set location
+        obj.location = Vector((x, y, ground.location.z))
+        
+        # Check for collisions
+        obj_bbox = [obj.matrix_world @ Vector(v) for v in obj.bound_box]
+        obj_min = Vector([min([v[i] for v in obj_bbox]) for i in range(3)])
+        obj_max = Vector([max([v[i] for v in obj_bbox]) for i in range(3)])
+        
+        # Check collision with house
+        if not (obj_max.x < house_min.x or obj_min.x > house_max.x or
+                obj_max.y < house_min.y or obj_min.y > house_max.y):
+            continue
+        
+        # Check collision with other objects
+        collision_found = False
+        for other in bpy.context.scene.objects:
+            if (other.type == 'MESH' and 
+                other.name != object_name and 
+                other.name not in ["ground", "house"]):
+                
+                other_bbox = [other.matrix_world @ Vector(v) for v in other.bound_box]
+                other_min = Vector([min([v[i] for v in other_bbox]) for i in range(3)])
+                other_max = Vector([max([v[i] for v in other_bbox]) for i in range(3)])
+                
+                if not (obj_max.x < other_min.x or obj_min.x > other_max.x or
+                        obj_max.y < other_min.y or obj_min.y > other_max.y):
+                    collision_found = True
+                    break
+        
+        if not collision_found:
+            # Finalize position
+            stick_object_to_ground(object_name)
+            
+            # Add random rotation
+            obj.rotation_euler.z = random.uniform(0, 2 * math.pi)
+            
+            print(f"Placed {object_name} at angle {math.degrees(angle):.1f}° and distance {distance:.2f}m")
+            return True
+    
+    print(f"Failed to place {object_name} after {max_attempts} attempts")
+    return False

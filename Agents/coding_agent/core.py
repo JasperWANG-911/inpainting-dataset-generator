@@ -69,7 +69,7 @@ class CodingAgent:
             fixed_obj["file_path"] = fixed_obj["file_path"].replace("\\", "\\\\")
             fixed_combination["objects"].append(fixed_obj)
         
-        # Build prompt for Claude with emphasis on intelligent scaling
+        # Build prompt for Claude
         prompt = f"""Generate complete Blender Python code to construct a scene with the following objects:
 
     {json.dumps(fixed_combination, indent=2)}
@@ -79,35 +79,25 @@ class CodingAgent:
 
     Requirements:
     1. Start by clearing the scene and adding a ground plane (size 100)
-    2. Import the house first (if present) and stick it to the ground
-    - Import it using import_object(filepath, "house")
-    - Use stick_object_to_ground("house") to place it
-    - No scaling needed for house
-    3. For each other object, follow this exact pattern:
-    - Import using import_object(filepath, instance_id)
-    - Place using place_object_avoiding_collision(instance_id)
-    - Apply initial scale using scale_object(instance_id, scale_factor)
-    4. Use object instance_ids as names in Blender
+    2. Import the house first (if present) and stick it to the ground using stick_object_to_ground("house")
+    3. For each other object one by one: import, place, and scale
+        - use import_object("file/path/to/object", "instance_id") to import
+        - use stick_object_to_ground("instance_id") to stick it to the ground
+        - use scale_object("instance_id", scale_factors) to scale
+    4. After all objects are imported and scaled, use place_objects_around_house().
     5. End by capturing scene views
 
-    IMPORTANT: This is the INITIAL code generation. You have NOT seen any images yet, so:
-    - Do NOT mention anything about objects being "too large" or "too small" based on review
-    - Do NOT say "based on review feedback" 
-    - Simply make reasonable initial estimates for scaling
+    IMPORTANT: Include step comments in this exact format:
+    # Step 1: Clear the scene
+    clear_scene()
 
+    # Step 2: Add ground plane
+    add_ground(size=100)
 
-    Example comments for scaling steps:
-    # Step 6: Scale tree_1
-    # Starting with scale factor 1.0
-    scale_object("tree_1", 1.0)
-
-    NOT:
-    # Based on review feedback, the tree is 2x too large...  (WRONG - no review has happened yet!)
-
-    Include clear step comments but keep them factual about what you're doing, not why.
+    etc.
 
     Output only the Python code without markdown formatting."""
-
+        
         response = self.client.messages.create(
             model=self.model,
             max_tokens=3000,
@@ -125,6 +115,11 @@ class CodingAgent:
         
         # Parse step descriptions from the generated code
         self._parse_step_descriptions(generated_code)
+        
+        # Debug: Print parsed steps
+        print(f"DEBUG: Parsed {len(self.step_descriptions)} steps:")
+        for step_num, desc in self.step_descriptions.items():
+            print(f"  Step {step_num}: {desc}")
         
         return generated_code
     

@@ -103,6 +103,11 @@ _result = bbox_data
         """
         Review the step using bounding box data instead of images
         """
+        
+        if "place_objects_around_house" in description.lower():
+        # This step doesn't need review - it's just random placement
+            return {"ok": True, "comment": "Random placement step - no review needed"}
+    
         # Get bounding box data from the scene
         bbox_data = self._get_scene_bbox_data()
         
