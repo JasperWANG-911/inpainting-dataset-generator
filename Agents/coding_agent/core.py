@@ -77,6 +77,17 @@ class CodingAgent:
     Available API functions:
     {self.api_reference}
 
+    CRITICAL RULES:
+    1. When you use import_object("path/to/file", "instance_id"), the object will be renamed to exactly "instance_id"
+    2. In ALL subsequent operations (stick_object_to_ground, scale_object, etc.), you MUST use the exact same "instance_id"
+    3. NEVER use names like "tree", "tree.000", "tree.001" - ALWAYS use the instance_id from the combination data
+
+    Example:
+    - If combination says instance_id is "tree_1", then:
+    - import_object("path/to/tree.blend", "tree_1")
+    - stick_object_to_ground("tree_1")  # NOT "tree" or "tree.000"
+    - scale_object("tree_1", 2.0)       # NOT "tree" or "tree.000"
+
     Requirements:
     1. Start by clearing the scene and adding a ground plane (size 100)
     2. Import the house first (if present) and stick it to the ground using stick_object_to_ground("house")

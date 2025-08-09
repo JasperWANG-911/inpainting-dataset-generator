@@ -386,7 +386,7 @@ async def main():
     )
     
     # Example usage - you can modify these parameters
-    description = "A house with 2 trees"
+    description = "A house with many many trees"
     assets_csv_path = "assets/assets.csv"
     num_combinations = 1
     
