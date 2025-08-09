@@ -80,10 +80,13 @@ class CodingAgent:
     Requirements:
     1. Start by clearing the scene and adding a ground plane (size 100)
     2. Import the house first (if present) and stick it to the ground
-    3. For each other object:
-    - Import it
-    - Scale it based on INITIAL ESTIMATES (not review feedback, as no review has happened yet)
-    - Place it around the house using place_single_object_around_house()
+    - Import it using import_object(filepath, "house")
+    - Use stick_object_to_ground("house") to place it
+    - No scaling needed for house
+    3. For each other object, follow this exact pattern:
+    - Import using import_object(filepath, instance_id)
+    - Place using place_object_avoiding_collision(instance_id)
+    - Apply initial scale using scale_object(instance_id, scale_factor)
     4. Use object instance_ids as names in Blender
     5. End by capturing scene views
 
@@ -288,26 +291,53 @@ from API.scene_construction_API import *
         current_code = self._read_current_code()
         current_step_code = self._extract_step_from_code(current_code, step)
         
+        # Check if this is a scaling step
+        is_scale_step = "scale" in task_description.lower()
+        
         # Check if object is not visible
         if "not visible" in review_comment.lower():
-            # Extract object name from the step
-            import re
-            object_match = re.search(r'["\']([\w_]+)["\']', current_step_code)
-            if object_match:
-                object_name = object_match.group(1)
-                
-                # Generate code to use place_single_object_around_house
-                prompt = f"""The object {object_name} is not visible, likely inside the house.
-    Generate code for this step that uses place_single_object_around_house() instead of the current placement method.
+            if is_scale_step:
+                # For scale steps, we should NOT change to placement
+                # Instead, suggest checking if the object was properly placed
+                prompt = f"""The object is not visible during a scaling step. This likely means the object wasn't properly placed in a previous step.
 
-    Current code:
-    {current_step_code}
+        Current scale code:
+        {current_step_code}
 
-    Generate only the fixed code that places the object around the house safely.
-    Output only the Python code without markdown formatting."""
+        Task: {task_description}
+        Review comment: {review_comment}
+
+        Available API functions:
+        {self.api_reference}
+
+        IMPORTANT RULES:
+        1. ONLY use functions that exist in the API reference above
+        2. Do NOT create new functions like object_exists() or check_object_visibility()
+        3. The scale operation should remain as is - do NOT replace it with placement
+        4. You can use bpy.data.objects.get() to check if an object exists
+        5. Keep the same step comment format
+
+        Generate only the fixed code for this step.
+        Output only the Python code without markdown formatting."""
             else:
-                # Fallback to regular fix
-                prompt = self._build_fix_prompt(current_step_code, task_description, review_comment)
+                # For placement steps, use place_single_object_around_house
+                import re
+                object_match = re.search(r'["\']([\w_]+)["\']', current_step_code)
+                if object_match:
+                    object_name = object_match.group(1)
+                    
+                    # Generate code to use place_single_object_around_house
+                    prompt = f"""The object {object_name} is not visible, likely inside the house.
+        Generate code for this step that uses place_single_object_around_house() instead of the current placement method.
+
+        Current code:
+        {current_step_code}
+
+        Generate only the fixed code that places the object around the house safely.
+        Output only the Python code without markdown formatting."""
+                else:
+                    # Fallback to regular fix
+                    prompt = self._build_fix_prompt(current_step_code, task_description, review_comment)
         else:
             # Regular scaling or other fixes
             prompt = self._build_fix_prompt(current_step_code, task_description, review_comment)

@@ -22,13 +22,12 @@ class Orchestrator:
         self.timeout = httpx.Timeout(60, connect=10.0)
         self.current_combination = None
         self.total_steps = 0
-        self.reviewing_images_dir = self.project_root / "reviewing_images"
-        self.reviewing_images_dir.mkdir(exist_ok=True)  
+        # REMOVED: self.reviewing_images_dir - no longer needed
         
         # Review control
         self.enable_review = enable_review
         # Steps that always need review (even in testing)
-        self.review_only_steps = review_only_steps or {"scale_objects", "adjust_scales"}
+        self.review_only_steps = review_only_steps or {"scale"}
         
         # Steps that never need review
         self.skip_review_steps = {"clear_scene", "add_ground", "capture_scene_views"}
@@ -167,7 +166,7 @@ class Orchestrator:
             step_info = await self.get_step_info(step_num)
             step_description = step_info.get("description", f"Step {step_num}")
             
-            max_retries = 3
+            max_retries = 5
             retry_count = 0
             review_result = None
             
@@ -222,15 +221,13 @@ class Orchestrator:
                 # Execute only this step's code in Blender
                 self.logger.info(f"Executing step {step_num} code in Blender...")
                 
-                # Determine if we need to capture views after this step
-                capture_views = self._should_review_step(step_num, step_description)
-                
+                # Never capture views anymore
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
                     response = await client.post(
                         f"{self.agents['execution']}/run-step-code",
                         json={
                             "code": step_code,
-                            "capture_views": capture_views
+                            "capture_views": False
                         }
                     )
                 
@@ -242,35 +239,55 @@ class Orchestrator:
                 
                 self.logger.info(f"Step {step_num} executed successfully")
                 
-                # Wait for Blender to update the scene
-                await asyncio.sleep(2)
+                # Shorter delay - no image capture needed
+                await asyncio.sleep(0.5)
                 
                 # Determine if this step needs review
                 if not self._should_review_step(step_num, step_description):
                     self.logger.info(f"✓ Step {step_num} completed (review skipped)")
                     break
                 
-                # Review the step
+                # Review the step using bounding box data
                 self.logger.info(f"Reviewing step {step_num}...")
-                
-                async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    response = await client.post(
-                        f"{self.agents['reviewing']}/review",
-                        json={
-                            "step": step_num,
-                            "description": step_description,
-                            "edit_hint": "Check if objects are properly sized and positioned. Trees should be proportional to the house."
-                        }
-                    )
-                
-                review_result = response.json()
-                
-                if review_result["ok"]:
+
+                try:
+                    async with httpx.AsyncClient(timeout=self.timeout) as client:
+                        response = await client.post(
+                            f"{self.agents['reviewing']}/review",
+                            json={
+                                "step": step_num,
+                                "description": step_description,
+                                "edit_hint": "Check if objects are properly sized relative to the house based on bounding box dimensions."
+                            }
+                        )
+                    
+                    # Check if response is valid
+                    if response.status_code != 200:
+                        self.logger.error(f"Review request failed with status {response.status_code}")
+                        review_result = {"ok": False, "comment": f"Review request failed with status {response.status_code}"}
+                    else:
+                        review_result = response.json()
+                        
+                        # Validate review result format
+                        if not isinstance(review_result, dict):
+                            self.logger.error(f"Invalid review result format: {review_result}")
+                            review_result = {"ok": False, "comment": "Invalid review result format"}
+                        elif "ok" not in review_result:
+                            self.logger.error(f"Review result missing 'ok' field: {review_result}")
+                            review_result = {"ok": False, "comment": "Review result missing 'ok' field"}
+                            
+                except Exception as e:
+                    self.logger.error(f"Review request failed: {str(e)}")
+                    review_result = {"ok": False, "comment": f"Review request failed: {str(e)}"}
+
+                # Now safely check the result
+                if review_result.get("ok", False):
                     self.logger.info(f"✓ Step {step_num} passed review")
                     break
                 else:
                     retry_count += 1
-                    self.logger.warning(f"✗ Step {step_num} failed review: {review_result['comment']}")
+                    comment = review_result.get("comment", "No comment provided")
+                    self.logger.warning(f"✗ Step {step_num} failed review: {comment}")
                     
                     if retry_count < max_retries:
                         self.logger.info(f"Retrying step {step_num} (attempt {retry_count + 1}/{max_retries})")
@@ -278,39 +295,10 @@ class Orchestrator:
                         self.logger.error(f"Step {step_num} failed after {max_retries} attempts")
                         return False
         
+        # If we get here, all steps completed successfully
         return True
     
-    async def _capture_scene_views(self):
-        """Trigger scene view capture through execution agent"""
-        capture_code = """
-import bpy
-import math
-import os
-
-# Add API path
-import sys
-sys.path.append(r'""" + str(self.project_root) + """')
-from API.scene_construction_API import capture_scene_views
-
-# Capture views
-capture_scene_views()
-"""
-        
-        # Write temporary capture script
-        temp_script = self.project_root / "temp_capture.py"
-        with open(temp_script, 'w') as f:
-            f.write(capture_code)
-        
-        # Execute capture
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                f"{self.agents['execution']}/run-script",
-                json={"script_path": str(temp_script)}
-            )
-        
-        # Clean up
-        if temp_script.exists():
-            temp_script.unlink()
+    # REMOVED: _capture_scene_views method - no longer needed
     
     async def generate_scene_for_combination(self, combination: Dict, combination_num: int):
         """Generate scene for a single combination"""

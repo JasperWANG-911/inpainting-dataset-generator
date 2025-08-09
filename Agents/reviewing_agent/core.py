@@ -1,11 +1,11 @@
 import os
 import json
 from anthropic import Anthropic
-import base64
+import socket
 
 class ReviewingAgent:
     """
-    ReviewingAgent, use Claude API to review Blender scene construction and give feedback.
+    ReviewingAgent using bounding box data instead of images to review object scales
     """
 
     def __init__(self):
@@ -13,138 +13,172 @@ class ReviewingAgent:
         if not api_key:
             raise RuntimeError("Missing ANTHROPIC_API_KEY environment variable")
         self.client = Anthropic(api_key=api_key)
-        self.model = "claude-3-haiku-20240307"   # change model name if needed
-
-    def _load_reviewing_images_as_messages(self) -> list:
+        self.model = "claude-3-haiku-20240307"
+        
+    def _get_scene_bbox_data(self) -> dict:
         """
-        Load images from reviewing_images directory
-        Images are named: top.png, front.png, back.png, left.png, right.png
-        Convert them to Base64 and return as message format.
+        Get bounding box data from Blender via socket connection
         """
-        # Fix the path - remove extra "imnainting_dataset_generator" 
-        base_dir = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "..", "..", "reviewing_images")
-        )
-        
-        # Create directory if it doesn't exist
-        os.makedirs(base_dir, exist_ok=True)
-        
-        images = []
-        missing_views = []
-        
-        for pos in ["top", "front", "back", "left", "right"]:
-            img_path = os.path.join(base_dir, f"{pos}.png")
-            if not os.path.isfile(img_path):
-                missing_views.append(pos)
-                continue
-            with open(img_path, "rb") as f:
-                b64 = base64.b64encode(f.read()).decode("utf-8")
-            
-            # Add image
-            images.append({
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": "image/png",
-                    "data": b64
-                }
-            })
-            # Add label
-            images.append({
-                "type": "text",
-                "text": f"[{pos} view]"
-            })
-        
-        # If no images found, return error message
-        if not images:
-            print(f"WARNING: No review images found in {base_dir}")
-            print(f"Missing views: {missing_views}")
-            return [{
-                "type": "text",
-                "text": f"ERROR: No review images found. Missing views: {', '.join(missing_views)}. Path checked: {base_dir}"
-            }]
-        
-        return images
+        # Code to get bounding box data from Blender
+        code = """
+import bpy
+from mathutils import Vector
 
-    def _build_messages(self, step: int, description: str, edit_hint: str) -> list:
-        """
-        Create messages for Claude Messages API with images
-        """
-        image_messages = self._load_reviewing_images_as_messages()
-        
-        content = [
-            {
-                "type": "text",
-                "text": f"""You are a reviewing agent in a multi-agent Blender scene pipeline.
-
-    Step: {step}
-    Task description: {description}
-
-    Here are the five views of the current scene:"""
-            }
-        ]
-        
-        # Add images
-        content.extend(image_messages)
-        
-        content.append({
-            "type": "text",
-            "text": f"""
-    Please:
-    1. Judge whether this step succeeded (output "ok": true) or failed ("ok": false).
-    2. If this is a scaling step and the scale is incorrect, provide a specific scaling factor recommendation.
-    For example: "The tree is too large compared to the house. Current scale appears to be 2x too big. Recommend scale_object('tree_1', 0.5)". 
-    If the object appears 2x too large and was already scaled, recommend the absolute scale from original size. 
-    For example: if tree was scaled 2x and is still too big by half, recommend scale_object('tree_1', 1.0) not 0.5
-    3. If you cannot see the object, provide a comment like "The tree is not visible in the scene."
-    4. Respond with a JSON object ONLY, for example:
-    {{"ok": false, "comment": "The tree is 3x too large. Recommend scale_object('tree_1', 0.3)"}}
-
-    Edit hint: {edit_hint}
-    Important: Your response must be valid JSON with "ok" (boolean) and "comment" (string) fields."""
-        })
-        
-        return [{"role": "user", "content": content}]
+def get_object_bbox_data(obj_name):
+    obj = bpy.data.objects.get(obj_name)
+    if not obj:
+        return None
     
+    # Get bounding box corners in world space
+    bbox_corners = [obj.matrix_world @ Vector(corner) for corner in obj.bound_box]
+    
+    # Calculate dimensions
+    min_x = min(corner.x for corner in bbox_corners)
+    max_x = max(corner.x for corner in bbox_corners)
+    min_y = min(corner.y for corner in bbox_corners)
+    max_y = max(corner.y for corner in bbox_corners)
+    min_z = min(corner.z for corner in bbox_corners)
+    max_z = max(corner.z for corner in bbox_corners)
+    
+    width = max_x - min_x
+    depth = max_y - min_y
+    height = max_z - min_z
+    
+    return {
+        'name': obj_name,
+        'width': width,
+        'depth': depth,
+        'height': height,
+        'volume': width * depth * height,
+        'location': list(obj.location),
+        'scale': list(obj.scale)
+    }
+
+# Get data for all relevant objects
+bbox_data = {}
+for obj_name in ['house', 'tree_1', 'tree_2', 'tree_3', 'tree_4', 'tree_5']:
+    data = get_object_bbox_data(obj_name)
+    if data:
+        bbox_data[obj_name] = data
+
+_result = bbox_data
+"""
+        
+        # Connect to Blender and execute
+        try:
+            client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            client.settimeout(10)
+            client.connect(('localhost', 8089))
+            client.send(code.encode('utf-8'))
+            
+            # Receive response
+            response_parts = []
+            while True:
+                part = client.recv(4096)
+                if not part:
+                    break
+                response_parts.append(part.decode('utf-8'))
+                try:
+                    json.loads(''.join(response_parts))
+                    break
+                except json.JSONDecodeError:
+                    continue
+            
+            response = ''.join(response_parts)
+            result = json.loads(response)
+            
+            if result.get('status') == 'success' and result.get('data'):
+                return result['data']
+            else:
+                return {}
+                
+        except Exception as e:
+            print(f"Error getting bbox data: {e}")
+            return {}
+        finally:
+            if 'client' in locals():
+                client.close()
+
     def review(self, step: int, description: str, edit_hint: str) -> dict:
         """
-        Call Claude API to review the step and return {"ok": bool, "comment": str}.
+        Review the step using bounding box data instead of images
         """
-        messages = self._build_messages(step, description, edit_hint)
+        # Get bounding box data from the scene
+        bbox_data = self._get_scene_bbox_data()
         
+        if not bbox_data:
+            return {"ok": False, "comment": "Failed to get scene data from Blender"}
+        
+        # Extract the object being reviewed from the description
+        import re
+        obj_match = re.search(r'[Ss]cale\s+(\w+)', description)
+        if not obj_match:
+            return {"ok": True, "comment": "Not a scaling step"}
+        
+        obj_name = obj_match.group(1)
+        
+        # Check if we have data for this object and the house
+        if obj_name not in bbox_data:
+            return {"ok": False, "comment": f"Object {obj_name} not found in scene"}
+        
+        if 'house' not in bbox_data:
+            return {"ok": True, "comment": "No house in scene to compare against"}
+        
+        # Get dimensions
+        house_data = bbox_data['house']
+        obj_data = bbox_data[obj_name]
+        
+        # Build prompt for Claude - IMPROVED VERSION with better tolerance
+        prompt = f"""You are reviewing the scale of objects in a 3D scene.
+
+Object being reviewed: {obj_name}
+Current scale: {obj_data['scale']}
+Current dimensions: height={obj_data['height']:.2f}m
+
+House dimensions: height={house_data['height']:.2f}m
+
+Real-world reference:
+- House height: typically 6-10 meters (single story: ~3m, two story: ~6-7m)
+- Tree height: varies greatly, but for residential scenes:
+  - Small ornamental trees: 3-6m
+  - Medium trees: 6-12m  
+  - Large trees: 12-20m
+- Trees near houses are usually kept at 0.5x to 2.0x the house height for aesthetic balance
+
+Current ratio: tree is {obj_data['height']/house_data['height']:.2f}x the house height.
+
+IMPORTANT: Consider that:
+1. A tree that's 50-200% of house height looks natural in most scenes
+2. Trees can vary greatly in size - there's no single "correct" height
+3. If the tree is within a reasonable range (0.5x to 2.0x house height), approve it
+4. Only reject if the scale is clearly wrong (e.g., tree is 10cm tall or 50m tall)
+
+Respond with JSON only:
+{{"ok": true/false, "comment": "explanation"}}
+
+If scaling is needed, calculate the EXACT scale factor needed from current size.
+For example, if tree is currently 10m and should be 5m, recommend scale_object('tree_1', 0.5)"""
+
         try:
             response = self.client.messages.create(
                 model=self.model,
-                messages=messages,
+                messages=[{"role": "user", "content": prompt}],
                 max_tokens=300,
                 temperature=0.0,
             )
             
             text = response.content[0].text.strip()
-            
-            # Parse JSON response
             result = json.loads(text)
             
-            # Ensure the response has the required format
-            if not isinstance(result, dict):
-                raise ValueError("Response is not a dictionary")
+            # Ensure proper format
+            if not isinstance(result, dict) or "ok" not in result:
+                return {"ok": False, "comment": "Invalid response format"}
             
-            # Ensure 'ok' field exists and is boolean
-            if "ok" not in result:
-                raise ValueError("Missing 'ok' field in response")
-            
-            # Ensure 'comment' field exists
+            result["ok"] = bool(result["ok"])
             if "comment" not in result:
                 result["comment"] = "No comment provided"
             
-            # Ensure 'ok' is boolean
-            result["ok"] = bool(result["ok"])
-            
             return result
             
-        except json.JSONDecodeError as e:
-            return {"ok": False, "comment": f"Failed to parse JSON response: {text}"}
-        except ValueError as e:
-            return {"ok": False, "comment": f"Invalid response format: {str(e)}"}
         except Exception as e:
-            return {"ok": False, "comment": f"API call failed: {str(e)}"}
+            return {"ok": False, "comment": f"Review failed: {str(e)}"}

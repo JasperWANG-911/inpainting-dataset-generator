@@ -37,8 +37,8 @@ def add_ground(size=50):
     return ground
 
 # Function to import objects
-def import_object(filepath):
-    """Import 3D object from file"""
+def import_object(filepath, object_name=None):
+    """Import 3D object from file with optional renaming"""
     # Ensure file exists
     if not os.path.exists(filepath):
         print(f"Error: File not found: {filepath}")
@@ -46,6 +46,9 @@ def import_object(filepath):
     
     # get the file extension
     ext = os.path.splitext(filepath)[1].lower()
+    
+    # Store list of objects before import
+    objects_before = set(bpy.data.objects)
     
     # import based on file type
     try:
@@ -78,6 +81,26 @@ def import_object(filepath):
             return
             
         print(f"Successfully imported: {filepath}")
+        
+        # Get newly imported objects
+        objects_after = set(bpy.data.objects)
+        new_objects = objects_after - objects_before
+        
+        # If object_name is provided and we have new objects, rename them
+        if object_name and new_objects:
+            if len(new_objects) == 1:
+                # Single object - rename it directly
+                obj = list(new_objects)[0]
+                obj.name = object_name
+                print(f"Renamed imported object to: {object_name}")
+            else:
+                # Multiple objects - rename with suffixes
+                for i, obj in enumerate(new_objects):
+                    if i == 0:
+                        obj.name = object_name
+                    else:
+                        obj.name = f"{object_name}.{i:03d}"
+                print(f"Renamed {len(new_objects)} imported objects with base name: {object_name}")
         
     except Exception as e:
         print(f"Error during import of {filepath}: {str(e)}")
@@ -190,169 +213,3 @@ def scale_object(object_name, scale_factor):
     else:
         print(f"Object {object_name} not found or is not a mesh.")
         return False
-
-# Function to place an object around the house
-def place_single_object_around_house(object_name, min_distance_factor=1.2, max_distance_factor=3.0):
-    # Get the object to place
-    obj = bpy.data.objects.get(object_name)
-    if not obj:
-        print(f"Object {object_name} not found")
-        return False
-    
-    # Get the house
-    house = bpy.data.objects.get('house')
-    if not house:
-        print("House not found, placing randomly on ground")
-        # If no house, use the simpler placement function
-        return place_object_avoiding_collision(object_name)
-    
-    # Get bounding box sizes
-    def get_bbox_dimensions(obj):
-        """Get object's bounding box dimensions considering current scale"""
-        bbox_corners = [obj.matrix_world @ Vector(corner) for corner in obj.bound_box]
-        min_x = min(corner.x for corner in bbox_corners)
-        max_x = max(corner.x for corner in bbox_corners)
-        min_y = min(corner.y for corner in bbox_corners)
-        max_y = max(corner.y for corner in bbox_corners)
-        min_z = min(corner.z for corner in bbox_corners)
-        max_z = max(corner.z for corner in bbox_corners)
-        return Vector((max_x - min_x, max_y - min_y, max_z - min_z))
-    
-    # Get house bounding box (treat as solid even if hollow)
-    house_dims = get_bbox_dimensions(house)
-    house_center = house.location
-    
-    # Calculate safe distance from house center
-    # This ensures object is placed outside house bounding box
-    house_radius = max(house_dims.x, house_dims.y) / 2
-    obj_dims = get_bbox_dimensions(obj)
-    obj_radius = max(obj_dims.x, obj_dims.y) / 2
-    
-    # Minimum safe distance from house center
-    min_safe_distance = (house_radius + obj_radius) * min_distance_factor
-    max_safe_distance = (house_radius + obj_radius) * max_distance_factor
-    
-    # Get other objects to avoid
-    other_objects = []
-    for other in bpy.data.objects:
-        if (other.type == 'MESH' and 
-            other.name != object_name and 
-            other.name != 'house' and 
-            other.name != 'ground'):
-            other_objects.append(other)
-    
-    # Try to place the object
-    max_attempts = 100
-    for attempt in range(max_attempts):
-        # Random angle around house
-        angle = random.uniform(0, 2 * math.pi)
-        
-        # Random distance within safe range
-        distance = random.uniform(min_safe_distance, max_safe_distance)
-        
-        # Calculate position
-        x = house_center.x + distance * math.cos(angle)
-        y = house_center.y + distance * math.sin(angle)
-        z = 0  # Will be adjusted by stick_object_to_ground
-        
-        # Set temporary position
-        obj.location = Vector((x, y, z))
-        
-        # Check collision with other objects
-        collision_found = False
-        obj_bbox_corners = [obj.matrix_world @ Vector(corner) for corner in obj.bound_box]
-        obj_min = Vector([min(corner[i] for corner in obj_bbox_corners) for i in range(3)])
-        obj_max = Vector([max(corner[i] for corner in obj_bbox_corners) for i in range(3)])
-        
-        for other in other_objects:
-            other_bbox_corners = [other.matrix_world @ Vector(corner) for corner in other.bound_box]
-            other_min = Vector([min(corner[i] for corner in other_bbox_corners) for i in range(3)])
-            other_max = Vector([max(corner[i] for corner in other_bbox_corners) for i in range(3)])
-            
-            # Check bounding box overlap
-            if not (obj_max.x < other_min.x or obj_min.x > other_max.x or
-                    obj_max.y < other_min.y or obj_min.y > other_max.y):
-                collision_found = True
-                break
-        
-        if not collision_found:
-            # Success! Stick to ground and finish
-            stick_object_to_ground(object_name)
-            
-            # Add random rotation for variety
-            obj.rotation_euler[2] = random.uniform(0, 2 * math.pi)
-            
-            print(f"Successfully placed {object_name} at distance {distance:.2f} from house")
-            return True
-    
-    print(f"Failed to place {object_name} after {max_attempts} attempts")
-    return False
-
-# Add this function to scene_construction_API.py
-def capture_scene_views():
-    """Capture scene from 5 different views and save as images"""
-    import os
-    
-    # Create output directory if it doesn't exist
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    output_dir = os.path.join(project_root, "reviewing_images")
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Store original camera and create a new one for capturing
-    original_camera = bpy.context.scene.camera
-    
-    # Create a new camera if none exists
-    if not original_camera:
-        bpy.ops.object.camera_add(location=(0, 0, 0))
-        camera = bpy.context.active_object
-        bpy.context.scene.camera = camera
-    else:
-        camera = original_camera
-    
-    # Set render resolution
-    bpy.context.scene.render.resolution_x = 800
-    bpy.context.scene.render.resolution_y = 600
-    
-    # Define camera positions for 5 views
-    views = {
-        'top': {
-            'location': (0, 0, 10),
-            'rotation': (0, 0, 0)
-        },
-        'front': {
-            'location': (0, -10, 2),
-            'rotation': (math.radians(80), 0, 0)
-        },
-        'back': {
-            'location': (0, 10, 2),
-            'rotation': (math.radians(80), 0, math.radians(180))
-        },
-        'left': {
-            'location': (-10, 0, 2),
-            'rotation': (math.radians(80), 0, math.radians(-90))
-        },
-        'right': {
-            'location': (10, 0, 2),
-            'rotation': (math.radians(80), 0, math.radians(90))
-        }
-    }
-    
-    # Capture each view
-    for view_name, view_data in views.items():
-        # Set camera position and rotation
-        camera.location = view_data['location']
-        camera.rotation_euler = view_data['rotation']
-        
-        # Set output path
-        output_path = os.path.join(output_dir, f"{view_name}.png")
-        bpy.context.scene.render.filepath = output_path
-        
-        # Render the image
-        bpy.ops.render.render(write_still=True)
-        print(f"Captured {view_name} view: {output_path}")
-    
-    # Restore original camera if we created a new one
-    if not original_camera:
-        bpy.data.objects.remove(camera, do_unlink=True)
-    
-    return True

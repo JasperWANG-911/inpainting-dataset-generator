@@ -145,92 +145,6 @@ class ExecutionAgent:
         # Execute the main code
         result = self.execute_code(code)
         
-        # After successful execution, capture scene views for reviewing
-        if result and result.get('status') == 'success' and capture_views:
-            self.logger.info("Capturing scene views for review...")
-            
-            # Create reviewing_images directory if it doesn't exist
-            reviewing_dir = self.project_root / "reviewing_images"
-            reviewing_dir.mkdir(exist_ok=True)
-            
-            # Code to capture views with hardcoded path
-            capture_code = f"""
-import bpy
-import math
-import os
-
-# Use hardcoded path
-output_dir = r"{str(reviewing_dir)}"
-print(f"Saving images to: {{output_dir}}")
-
-# Store original camera and create a new one for capturing
-original_camera = bpy.context.scene.camera
-
-# Create a new camera if none exists
-if not original_camera:
-    bpy.ops.object.camera_add(location=(0, 0, 0))
-    camera = bpy.context.active_object
-    bpy.context.scene.camera = camera
-else:
-    camera = original_camera
-
-# Set render resolution
-bpy.context.scene.render.resolution_x = 800
-bpy.context.scene.render.resolution_y = 600
-
-# Define camera positions for 5 views
-views = {{
-    'top': {{
-        'location': (0, 0, 100),
-        'rotation': (0, 0, 0)
-    }},
-    'front': {{
-        'location': (0, -100, 2),
-        'rotation': (math.radians(80), 0, 0)
-    }},
-    'back': {{
-        'location': (0, 100, 2),
-        'rotation': (math.radians(80), 0, math.radians(180))
-    }},
-    'left': {{
-        'location': (-100, 0, 2),
-        'rotation': (math.radians(80), 0, math.radians(-90))
-    }},
-    'right': {{
-        'location': (100, 0, 2),
-        'rotation': (math.radians(80), 0, math.radians(90))
-    }}
-}}
-
-# Capture each view
-for view_name, view_data in views.items():
-    # Set camera position and rotation
-    camera.location = view_data['location']
-    camera.rotation_euler = view_data['rotation']
-    
-    # Set output path
-    output_path = os.path.join(output_dir, f"{{view_name}}.png")
-    bpy.context.scene.render.filepath = output_path
-    
-    # Render the image
-    bpy.ops.render.render(write_still=True)
-    print(f"Captured {{view_name}} view: {{output_path}}")
-
-# Restore original camera if we created a new one
-if not original_camera:
-    bpy.data.objects.remove(camera, do_unlink=True)
-
-print("Scene capture completed")
-"""
-            
-            capture_result = self.execute_code(capture_code)
-            if capture_result and capture_result.get('status') == 'success':
-                self.logger.info("Scene views captured successfully")
-            else:
-                self.logger.warning("Failed to capture scene views")
-        elif not capture_views:
-            self.logger.info("Scene capture skipped (capture_views=False)")
-
         self.logger.info(f"Code being executed:\n{code[:500]}...")
         
         return result
@@ -242,33 +156,6 @@ print("Scene capture completed")
         
         # Execute the code
         result = self.execute_code(code)
-        
-        # Optionally capture views after this step
-        if result and result.get('status') == 'success' and capture_views:
-            self.logger.info("Capturing scene views for review...")
-            
-            # Create reviewing_images directory if it doesn't exist
-            reviewing_dir = self.project_root / "reviewing_images"
-            reviewing_dir.mkdir(exist_ok=True)
-            
-            # Capture views code...
-            capture_code = f"""
-    import bpy
-    import math
-    import os
-
-    # Use hardcoded path
-    output_dir = r"{str(reviewing_dir)}"
-    print(f"Saving images to: {{output_dir}}")
-
-    # ... (rest of capture code)
-    """
-            
-            capture_result = self.execute_code(capture_code)
-            if capture_result and capture_result.get('status') == 'success':
-                self.logger.info("Scene views captured successfully")
-            else:
-                self.logger.warning("Failed to capture scene views")
         
         return result
 

@@ -8,7 +8,6 @@ agent = ExecutionAgent()
 
 class RunScriptRequest(BaseModel):
     script_path: str
-    capture_views: bool = True  # Add this parameter with default True
 
 class RunScriptResponse(BaseModel):
     ok: bool
@@ -17,7 +16,6 @@ class RunScriptResponse(BaseModel):
 
 class RunStepCodeRequest(BaseModel):
     code: str
-    capture_views: bool = False
 
 class RunStepCodeResponse(BaseModel):
     ok: bool
@@ -27,7 +25,7 @@ class RunStepCodeResponse(BaseModel):
 @app.post("/run-step-code", response_model=RunStepCodeResponse)
 async def run_step_code(req: RunStepCodeRequest):
     try:
-        res = agent.execute_step_code(req.code, capture_views=req.capture_views)
+        res = agent.execute_step_code(req.code)
         
         if res is None:
             return RunStepCodeResponse(
@@ -53,7 +51,7 @@ async def run_step_code(req: RunStepCodeRequest):
 async def run_script(req: RunScriptRequest):
     try:
         # use socket to send the script to Blender
-        res = agent.execute_codes_file(req.script_path, capture_views=req.capture_views)
+        res = agent.execute_codes_file(req.script_path)
         
         if res is None:
             return RunScriptResponse(
