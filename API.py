@@ -5,6 +5,7 @@ import random
 import mathutils
 from mathutils import Vector
 
+# ==========================APIs for Scene Construction==========================
 # Function to clear the current scene
 def clear_scene():
     bpy.ops.object.select_all(action='SELECT')
@@ -133,16 +134,12 @@ def scale_object(object_name, scale_factor):
         return False
 
 # Function to place all objects randomly around the house for occlusion
-# Debug version to test in system
-# Function to place all objects randomly around the house for occlusion
 def place_objects_around_house(excluded_objects=["ground", "house"], 
                                min_distance=2.0, 
                                max_distance=15.0, 
                                cluster_probability=0.3,
                                max_attempts_per_object=50):
     """
-    Place all objects randomly around the house for creating occlusion datasets.
-    
     Args:
         excluded_objects: List of object names to exclude from repositioning
         min_distance: Minimum distance from house center (meters)
@@ -275,101 +272,168 @@ def place_objects_around_house(excluded_objects=["ground", "house"],
     print(f"Successfully placed {len(placed_objects)}/{len(objects_to_place)} objects around house")
     return True
 
-
-# Alternative function to place a single object around the house
-def place_single_object_around_house(object_name, 
-                                     min_distance=2.0, 
-                                     max_distance=15.0,
-                                     preferred_angle=None,
-                                     angle_variance=math.pi/4,
-                                     max_attempts=50):
-    """
-    Place a single object around the house at a specific angle or randomly.
-    
+# ========================APIs for Rendering and Camera==========================
+# Function to create a hemisphere of cameras around all objects 
+def create_hemisphere_cameras(num_cameras=50, camera_height_ratio=1.2):
+    """ 
     Args:
-        object_name: Name of the object to place
-        min_distance: Minimum distance from house center
-        max_distance: Maximum distance from house center
-        preferred_angle: Preferred angle in radians (0 = front, pi/2 = left, pi = back, 3*pi/2 = right)
-        angle_variance: Random variance around preferred angle
-        max_attempts: Maximum placement attempts
+        num_cameras: Number of cameras to create (default 50)
+        camera_height_ratio: Multiplier for hemisphere radius (default 1.2)
     """
     import math
+    import numpy as np
     
-    # Get references
-    obj = bpy.data.objects.get(object_name)
-    house = bpy.data.objects.get("house")
-    ground = bpy.data.objects.get("ground")
+    # Get all mesh objects except ground
+    objects = []
+    for obj in bpy.context.scene.objects:
+        if obj.type == 'MESH' and obj.name != 'ground':
+            objects.append(obj)
     
-    if not obj or not house or not ground:
-        print(f"Error: Required objects not found (obj: {obj}, house: {house}, ground: {ground})")
-        return False
+    if not objects:
+        print("No objects found to create hemisphere around")
+        return []
     
-    # Get house center and dimensions
-    house_bbox = [house.matrix_world @ Vector(v) for v in house.bound_box]
-    house_center = sum(house_bbox, Vector()) / len(house_bbox)
-    house_center.z = 0
+    # Calculate bounding box of all objects
+    min_x = min_y = min_z = float('inf')
+    max_x = max_y = max_z = float('-inf')
     
-    house_min = Vector([min([v[i] for v in house_bbox]) for i in range(3)])
-    house_max = Vector([max([v[i] for v in house_bbox]) for i in range(3)])
-    house_width = house_max.x - house_min.x
-    house_depth = house_max.y - house_min.y
+    for obj in objects:
+        for corner in obj.bound_box:
+            world_corner = obj.matrix_world @ Vector(corner)
+            min_x = min(min_x, world_corner.x)
+            max_x = max(max_x, world_corner.x)
+            min_y = min(min_y, world_corner.y)
+            max_y = max(max_y, world_corner.y)
+            min_z = min(min_z, world_corner.z)
+            max_z = max(max_z, world_corner.z)
     
-    # Adjust min distance
-    actual_min_distance = min_distance + max(house_width, house_depth) / 2
+    # Calculate center and radius of minimum enclosing circle (on XY plane)
+    center_x = (min_x + max_x) / 2
+    center_y = (min_y + max_y) / 2
     
-    for attempt in range(max_attempts):
-        # Calculate angle
-        if preferred_angle is not None:
-            angle = preferred_angle + random.uniform(-angle_variance, angle_variance)
+    # Force hemisphere center to be at ground level (z=0)
+    center_z = 0
+    
+    # Calculate radius as distance from center to furthest corner
+    # Include both horizontal distance and vertical height
+    radius = 0
+    max_height = max_z  # Maximum height of objects
+    
+    for obj in objects:
+        for corner in obj.bound_box:
+            world_corner = obj.matrix_world @ Vector(corner)
+            # Horizontal distance from center
+            horizontal_dist = math.sqrt((world_corner.x - center_x)**2 + (world_corner.y - center_y)**2)
+            # For hemisphere, we need to ensure cameras can see tall objects
+            # So we consider both horizontal distance and height
+            effective_radius = math.sqrt(horizontal_dist**2 + world_corner.z**2)
+            radius = max(radius, horizontal_dist, effective_radius)
+    
+    # Add some margin to the radius
+    hemisphere_radius = radius * camera_height_ratio
+    
+    # Create collection for cameras
+    camera_collection = bpy.data.collections.new("Hemisphere_Cameras")
+    bpy.context.scene.collection.children.link(camera_collection)
+    
+    # Generate camera positions on hemisphere
+    cameras = []
+    
+    # Use golden ratio for better distribution
+    golden_ratio = (1 + math.sqrt(5)) / 2
+    
+    for i in range(num_cameras):
+        # Generate points on hemisphere using fibonacci sphere
+        theta = 2 * math.pi * i / golden_ratio  # Azimuth angle
+        phi = math.acos(1 - i / num_cameras)  # Polar angle (0 to pi/2 for hemisphere)
+        
+        # Convert spherical to cartesian coordinates
+        # Center at (center_x, center_y, 0) instead of origin
+        x = center_x + hemisphere_radius * math.sin(phi) * math.cos(theta)
+        y = center_y + hemisphere_radius * math.sin(phi) * math.sin(theta)
+        z = hemisphere_radius * math.cos(phi)  # z starts from 0 (ground level)
+        
+        # Create camera
+        bpy.ops.object.camera_add(location=(x, y, z))
+        camera = bpy.context.active_object
+        camera.name = f"Camera_Hemisphere_{i:03d}"
+        
+        # Point camera to scene center at ground level
+        look_at_point = Vector((center_x, center_y, max_height/2))  # Look at middle height of scene
+        direction = look_at_point - camera.location
+        rot_quat = direction.to_track_quat('-Z', 'Y')
+        camera.rotation_euler = rot_quat.to_euler()
+        
+        # Move camera to the hemisphere collection
+        # First ensure it's linked to scene collection
+        if camera.name not in bpy.context.scene.collection.objects:
+            bpy.context.scene.collection.objects.link(camera)
+        
+        # Now unlink from scene collection and link to camera collection
+        bpy.context.scene.collection.objects.unlink(camera)
+        camera_collection.objects.link(camera)
+        
+        # Set camera properties
+        camera.data.lens = 35  # Standard lens
+        camera.data.clip_end = hemisphere_radius * 3  # Ensure we can see everything
+        
+        cameras.append(camera)
+    
+    # Create empty at scene center for visualization
+    bpy.ops.object.empty_add(type='SPHERE', location=(center_x, center_y, 0))
+    empty = bpy.context.active_object
+    empty.name = "Hemisphere_Center"
+    empty.empty_display_size = 0.5
+    
+    return cameras
+
+# Function to render the scene and export images(default path is "results/images")
+def render_all_hemisphere_cameras(output_path=None, file_format="PNG"):
+    import os
+    
+    # If no path specified, use default path relative to the blend file or current directory
+    if output_path is None:
+        # Try to get the directory of the current blend file
+        if bpy.data.filepath:
+            project_dir = os.path.dirname(bpy.data.filepath)
         else:
-            angle = random.uniform(0, 2 * math.pi)
+            # If no blend file saved, use current working directory
+            project_dir = os.getcwd()
         
-        # Calculate distance
-        distance = random.uniform(actual_min_distance, max_distance)
-        
-        # Calculate position
-        x = house_center.x + distance * math.cos(angle)
-        y = house_center.y + distance * math.sin(angle)
-        
-        # Set location
-        obj.location = Vector((x, y, ground.location.z))
-        
-        # Check for collisions
-        obj_bbox = [obj.matrix_world @ Vector(v) for v in obj.bound_box]
-        obj_min = Vector([min([v[i] for v in obj_bbox]) for i in range(3)])
-        obj_max = Vector([max([v[i] for v in obj_bbox]) for i in range(3)])
-        
-        # Check collision with house
-        if not (obj_max.x < house_min.x or obj_min.x > house_max.x or
-                obj_max.y < house_min.y or obj_min.y > house_max.y):
-            continue
-        
-        # Check collision with other objects
-        collision_found = False
-        for other in bpy.context.scene.objects:
-            if (other.type == 'MESH' and 
-                other.name != object_name and 
-                other.name not in ["ground", "house"]):
-                
-                other_bbox = [other.matrix_world @ Vector(v) for v in other.bound_box]
-                other_min = Vector([min([v[i] for v in other_bbox]) for i in range(3)])
-                other_max = Vector([max([v[i] for v in other_bbox]) for i in range(3)])
-                
-                if not (obj_max.x < other_min.x or obj_min.x > other_max.x or
-                        obj_max.y < other_min.y or obj_min.y > other_max.y):
-                    collision_found = True
-                    break
-        
-        if not collision_found:
-            # Finalize position
-            stick_object_to_ground(object_name)
-            
-            # Add random rotation
-            obj.rotation_euler.z = random.uniform(0, 2 * math.pi)
-            
-            print(f"Placed {object_name} at angle {math.degrees(angle):.1f}° and distance {distance:.2f}m")
-            return True
+        # Create results/images directory
+        output_path = os.path.join(project_dir, "results", "images")
     
-    print(f"Failed to place {object_name} after {max_attempts} attempts")
-    return False
+    # Create output directory if it doesn't exist
+    os.makedirs(output_path, exist_ok=True)
+    
+    # Get all hemisphere cameras
+    cameras = [obj for obj in bpy.data.objects if obj.type == 'CAMERA' and 'Camera_Hemisphere' in obj.name]
+    
+    if not cameras:
+        print("No hemisphere cameras found!")
+        return
+    
+    # Store original camera
+    original_camera = bpy.context.scene.camera
+    
+    # Set render settings
+    bpy.context.scene.render.image_settings.file_format = file_format
+    
+    # Render from each camera
+    for i, camera in enumerate(cameras):
+        print(f"Rendering from {camera.name} ({i+1}/{len(cameras)})")
+        
+        # Set active camera
+        bpy.context.scene.camera = camera
+        
+        # Set output path
+        output_file = os.path.join(output_path, f"{camera.name}.{file_format.lower()}")
+        bpy.context.scene.render.filepath = output_file
+        
+        # Render
+        bpy.ops.render.render(write_still=True)
+    
+    # Restore original camera
+    bpy.context.scene.camera = original_camera
+    
+    print(f"Completed rendering {len(cameras)} views to {output_path}")

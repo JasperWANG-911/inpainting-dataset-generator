@@ -39,7 +39,7 @@ class CodingAgent:
     
     def _load_api_reference(self) -> str:
         """Load scene construction API reference."""
-        api_path = self.project_root / "API/scene_construction_API.py"
+        api_path = self.project_root / "API.py"
         if api_path.exists():
             with open(api_path, 'r', encoding='utf-8') as f:
                 return f.read()
@@ -96,7 +96,8 @@ class CodingAgent:
         - use stick_object_to_ground("instance_id") to stick it to the ground
         - use scale_object("instance_id", scale_factors) to scale
     4. After all objects are imported and scaled, use place_objects_around_house().
-    5. End by capturing scene views
+    5. Create hemisphere cameras to capture the scene from all angles use create_hemisphere_cameras()
+    6. Export the image captured by each camera using render_all_hemisphere_cameras()
 
     IMPORTANT: Include step comments in this exact format:
     # Step 1: Clear the scene
@@ -174,7 +175,7 @@ import os
 
 # Add API path and import functions
 sys.path.append(r'{}')
-from API.scene_construction_API import *
+from API import *
 
 """.format(self.project_root)
             
@@ -238,7 +239,7 @@ from API.scene_construction_API import *
                 final_code += "import sys\nimport os\n\n"
                 final_code += "# Add API path and import functions\n"
                 final_code += f"sys.path.append(r'{self.project_root}')\n"
-                final_code += "from API.scene_construction_API import *\n\n"
+                final_code += "from API import *\n\n"
                 final_code += complete_code
                 
                 self._write_code(final_code)
