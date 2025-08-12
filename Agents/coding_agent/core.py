@@ -96,8 +96,14 @@ class CodingAgent:
         - use stick_object_to_ground("instance_id") to stick it to the ground
         - use scale_object("instance_id", scale_factors) to scale
     4. After all objects are imported and scaled, use place_objects_around_house().
-    5. Create hemisphere cameras to capture the scene from all angles use create_hemisphere_cameras()
-    6. Export the image captured by each camera using render_all_hemisphere_cameras()
+    5. Remove the ground plane using remove_ground() to show the HDRI ground instead
+    6. Set up HDRI environment lighting using set_hdri_environment() before creating cameras
+    - HDRI path like "Assets/hdri/env_1.exr" or similar, which are all located in the "Assets/hdri/" directory
+    - Set appropriate strength (usually 0.5-2.0) and rotation if needed
+    7. Create hemisphere cameras to capture the scene from all angles use create_hemisphere_cameras()
+    8. Export the image captured by each camera using render_all_hemisphere_cameras()
+    9. Export camera parameters using export_camera_parameters() with 'opencv' coordinate system
+    10. Export scene point clouds using export_scene_pointcloud() for ground truth data
 
     IMPORTANT: Include step comments in this exact format:
     # Step 1: Clear the scene

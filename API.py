@@ -142,7 +142,7 @@ def place_objects_around_house(excluded_objects=["ground", "house"],
     """
     Args:
         excluded_objects: List of object names to exclude from repositioning
-        min_distance: Minimum distance from house center (meters)
+        min_distance: Minimum distance from house bounding box (meters)
         max_distance: Maximum distance from house center (meters)
         cluster_probability: Probability that an object will be placed near another object
         max_attempts_per_object: Maximum placement attempts per object
@@ -157,19 +157,21 @@ def place_objects_around_house(excluded_objects=["ground", "house"],
         print("Error: House or ground not found in scene")
         return False
     
-    # Get house bounding box and center
+    # Get house bounding box
     house_bbox = [house.matrix_world @ Vector(v) for v in house.bound_box]
     house_center = sum(house_bbox, Vector()) / len(house_bbox)
     house_center.z = 0  # Project to ground level
     
-    # Calculate house dimensions for better placement
+    # Calculate house bounding box min/max
     house_min = Vector([min([v[i] for v in house_bbox]) for i in range(3)])
     house_max = Vector([max([v[i] for v in house_bbox]) for i in range(3)])
     house_width = house_max.x - house_min.x
     house_depth = house_max.y - house_min.y
     
-    # Adjust min distance based on house size
-    actual_min_distance = min_distance + max(house_width, house_depth) / 2
+    # Calculate the actual minimum distance from house center
+    # This accounts for the house size + desired margin
+    house_half_diagonal = math.sqrt((house_width/2)**2 + (house_depth/2)**2)
+    min_distance_from_center = house_half_diagonal + min_distance
     
     # Get all objects to reposition
     objects_to_place = []
@@ -185,7 +187,7 @@ def place_objects_around_house(excluded_objects=["ground", "house"],
     # Shuffle objects for random placement order
     random.shuffle(objects_to_place)
     
-    # Track placed objects for clustering
+    # Track placed objects for clustering and collision detection
     placed_objects = []
     
     # Place each object
@@ -200,39 +202,57 @@ def place_objects_around_house(excluded_objects=["ground", "house"],
                 
                 # Place near the target object
                 angle_offset = random.uniform(0, 2 * math.pi)
-                distance_offset = random.uniform(1.0, 3.0)  # Distance from target object
+                distance_offset = random.uniform(1.5, 3.0)  # Distance from target object
                 
                 x = target_obj.location.x + distance_offset * math.cos(angle_offset)
                 y = target_obj.location.y + distance_offset * math.sin(angle_offset)
             else:
                 # Place randomly around house
-                # Use polar coordinates for even distribution
                 angle = random.uniform(0, 2 * math.pi)
-                distance = random.uniform(actual_min_distance, max_distance)
+                # Distance from house center, ensuring minimum clearance
+                distance = random.uniform(min_distance_from_center, max_distance)
                 
-                # Calculate position
+                # Calculate position relative to house center
                 x = house_center.x + distance * math.cos(angle)
                 y = house_center.y + distance * math.sin(angle)
             
             # Add some randomness to make placement more natural
-            x += random.uniform(-1.0, 1.0)
-            y += random.uniform(-1.0, 1.0)
+            x += random.uniform(-0.5, 0.5)
+            y += random.uniform(-0.5, 0.5)
             
             # Set temporary location
             obj.location = Vector((x, y, ground.location.z))
+            
+            # Update object transform to get correct bounding box
+            bpy.context.view_layer.update()
             
             # Get object bounding box at new location
             obj_bbox = [obj.matrix_world @ Vector(v) for v in obj.bound_box]
             obj_min = Vector([min([v[i] for v in obj_bbox]) for i in range(3)])
             obj_max = Vector([max([v[i] for v in obj_bbox]) for i in range(3)])
             
-            # Check if object is within acceptable distance range
-            dist_to_house = (Vector((x, y, 0)) - house_center).length
-            if dist_to_house < actual_min_distance or dist_to_house > max_distance:
+            # Check if object is too far from house center
+            dist_to_house_center = (Vector((x, y, 0)) - house_center).length
+            if dist_to_house_center > max_distance:
                 continue
             
-            # Check for collisions with other objects
-            collision_found = False
+            # Check collision with house (including min_distance margin)
+            house_collision = False
+            
+            # Calculate minimum required separation
+            separation_x = min_distance
+            separation_y = min_distance
+            
+            # Check if object is too close to house
+            if (obj_min.x < house_max.x + separation_x and 
+                obj_max.x > house_min.x - separation_x and
+                obj_min.y < house_max.y + separation_y and 
+                obj_max.y > house_min.y - separation_y):
+                house_collision = True
+                continue
+            
+            # Check collision with other placed objects
+            object_collision = False
             for other_obj in placed_objects:
                 if other_obj == obj:
                     continue
@@ -242,29 +262,35 @@ def place_objects_around_house(excluded_objects=["ground", "house"],
                 other_min = Vector([min([v[i] for v in other_bbox]) for i in range(3)])
                 other_max = Vector([max([v[i] for v in other_bbox]) for i in range(3)])
                 
-                # Check for overlap
-                if not (obj_max.x < other_min.x or obj_min.x > other_max.x or
-                        obj_max.y < other_min.y or obj_min.y > other_max.y):
-                    collision_found = True
+                # Check for overlap (with small margin)
+                margin = 0.5  # Small margin between objects
+                if (obj_min.x < other_max.x + margin and 
+                    obj_max.x > other_min.x - margin and
+                    obj_min.y < other_max.y + margin and 
+                    obj_max.y > other_min.y - margin):
+                    object_collision = True
                     break
             
-            # Also check collision with house
-            if not collision_found:
-                if not (obj_max.x < house_min.x or obj_min.x > house_max.x or
-                        obj_max.y < house_min.y or obj_min.y > house_max.y):
-                    collision_found = True
+            if object_collision:
+                continue
             
-            if not collision_found:
-                # Finalize position
-                stick_object_to_ground(obj.name)
-                
-                # Add random rotation for variety
-                obj.rotation_euler.z = random.uniform(0, 2 * math.pi)
-                
-                placed_objects.append(obj)
-                placed = True
-                print(f"Placed {obj.name} at distance {dist_to_house:.2f}m from house")
-                break
+            # If we get here, placement is valid
+            # Finalize position
+            stick_object_to_ground(obj.name)
+            
+            # Add random rotation for variety
+            obj.rotation_euler.z = random.uniform(0, 2 * math.pi)
+            
+            placed_objects.append(obj)
+            placed = True
+            
+            # Calculate actual distance from object edge to house edge for logging
+            dist_x = max(0, max(house_min.x - obj_max.x, obj_min.x - house_max.x))
+            dist_y = max(0, max(house_min.y - obj_max.y, obj_min.y - house_max.y))
+            edge_dist = math.sqrt(dist_x**2 + dist_y**2) if (dist_x > 0 or dist_y > 0) else 0
+            
+            print(f"Placed {obj.name} - edge distance from house: {edge_dist:.2f}m")
+            break
         
         if not placed:
             print(f"Warning: Could not find valid placement for {obj.name} after {max_attempts_per_object} attempts")
@@ -272,7 +298,41 @@ def place_objects_around_house(excluded_objects=["ground", "house"],
     print(f"Successfully placed {len(placed_objects)}/{len(objects_to_place)} objects around house")
     return True
 
-# ========================APIs for Rendering and Camera==========================
+# Function to remove ground plane before rendering
+def remove_ground():
+    # First, apply all constraints to lock object positions
+    for obj in bpy.context.scene.objects:
+        if obj.type == 'MESH' and obj.name != 'ground':
+            # Select the object
+            bpy.context.view_layer.objects.active = obj
+            
+            # Apply all constraints to make positions permanent
+            for constraint in obj.constraints:
+                if constraint.type == 'SHRINKWRAP':
+                    # Store the current location
+                    current_loc = obj.location.copy()
+                    
+                    # Apply the constraint
+                    try:
+                        bpy.ops.constraint.apply(constraint=constraint.name)
+                    except:
+                        # If apply fails, just remove the constraint
+                        obj.constraints.remove(constraint)
+                    
+                    # Ensure location is preserved
+                    obj.location = current_loc
+    
+    # Now remove the ground
+    ground = bpy.data.objects.get('ground')
+    if ground:
+        bpy.data.objects.remove(ground, do_unlink=True)
+        print("Ground plane removed successfully")
+    else:
+        print("No ground plane found to remove")
+    
+    return True
+
+# ========================APIs for Rendering================================
 # Function to create a hemisphere of cameras around all objects 
 def create_hemisphere_cameras(num_cameras=50, camera_height_ratio=1.2):
     """ 
@@ -437,3 +497,292 @@ def render_all_hemisphere_cameras(output_path=None, file_format="PNG"):
     bpy.context.scene.camera = original_camera
     
     print(f"Completed rendering {len(cameras)} views to {output_path}")
+
+# Function to set HDRI environment lighting
+def set_hdri_environment(hdri_path, strength=1.0, rotation_z=0.0):
+    import os
+    
+    # Check if file exists
+    if not os.path.exists(hdri_path):
+        print(f"Error: HDRI file not found: {hdri_path}")
+        return False
+    
+    # Get the world
+    world = bpy.context.scene.world
+    
+    # Enable use of nodes
+    world.use_nodes = True
+    nodes = world.node_tree.nodes
+    links = world.node_tree.links
+    
+    # Clear existing nodes
+    nodes.clear()
+    
+    # Add required nodes
+    # 1. Texture Coordinate node
+    tex_coord = nodes.new(type='ShaderNodeTexCoord')
+    tex_coord.location = (-800, 300)
+    
+    # 2. Mapping node for rotation control
+    mapping = nodes.new(type='ShaderNodeMapping')
+    mapping.location = (-600, 300)
+    mapping.inputs['Rotation'].default_value[2] = rotation_z  # Z rotation
+    
+    # 3. Environment Texture node
+    env_texture = nodes.new(type='ShaderNodeTexEnvironment')
+    env_texture.location = (-400, 300)
+    env_texture.image = bpy.data.images.load(hdri_path)
+    env_texture.interpolation = 'Linear'  # Better quality
+    
+    # 4. Background shader
+    background = nodes.new(type='ShaderNodeBackground')
+    background.location = (-100, 300)
+    background.inputs['Strength'].default_value = strength
+    
+    # 5. World Output
+    output = nodes.new(type='ShaderNodeOutputWorld')
+    output.location = (100, 300)
+    
+    # Connect nodes
+    links.new(tex_coord.outputs['Generated'], mapping.inputs['Vector'])
+    links.new(mapping.outputs['Vector'], env_texture.inputs['Vector'])
+    links.new(env_texture.outputs['Color'], background.inputs['Color'])
+    links.new(background.outputs['Background'], output.inputs['Surface'])
+    
+    # Set viewport shading to use scene world
+    for area in bpy.context.screen.areas:
+        if area.type == 'VIEW_3D':
+            for space in area.spaces:
+                if space.type == 'VIEW_3D':
+                    space.shading.use_scene_world = True
+                    space.shading.use_scene_lights = True
+    
+    print(f"HDRI environment set: {hdri_path}")
+    return True
+
+# =======================APIs for ground truth extraction=================================
+# Function to export camera intrinsics and extrinsics
+def export_camera_parameters(output_path=None):
+    import os
+    import csv
+    from mathutils import Matrix
+    
+    # Default output path
+    if output_path is None:
+        if bpy.data.filepath:
+            project_dir = os.path.dirname(bpy.data.filepath)
+        else:
+            project_dir = os.getcwd()
+        output_path = os.path.join(project_dir, "results", "intrinsics_and_extrinsics.csv")
+    
+    # Create directory if needed
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    
+    # Get all hemisphere cameras
+    cameras = [obj for obj in bpy.data.objects if obj.type == 'CAMERA' and 'Camera_Hemisphere' in obj.name]
+    
+    if not cameras:
+        print("No hemisphere cameras found!")
+        return
+    
+    # Prepare CSV data
+    csv_data = []
+    
+    # Get render resolution
+    render = bpy.context.scene.render
+    width = render.resolution_x
+    height = render.resolution_y
+    
+    for camera in cameras:
+        cam_data = camera.data
+        
+        # Calculate intrinsic parameters
+        # Focal length in pixels
+        if cam_data.sensor_fit == 'HORIZONTAL':
+            sensor_size = cam_data.sensor_width
+            fx = (width * cam_data.lens) / sensor_size
+            fy = fx  # Assuming square pixels
+        else:
+            sensor_size = cam_data.sensor_height
+            fy = (height * cam_data.lens) / sensor_size
+            fx = fy
+        
+        # Principal point (image center)
+        cx = width / 2.0
+        cy = height / 2.0
+        
+        # Get camera transformation matrix
+        cam_matrix = camera.matrix_world
+        
+        
+
+        # Convert to OpenCV coordinate system
+        flip = Matrix([
+            [1, 0, 0],
+            [0, -1, 0],
+            [0, 0, -1]
+        ])
+
+        # get rotation matrix
+        R_blender = cam_matrix.to_3x3()
+        R_opencv = flip @ R_blender
+
+        # get translation vector
+        t_blender = cam_matrix.translation
+        t_opencv = flip @ t_blender
+        
+        # Flatten rotation matrix for CSV (row-major order)
+        r11, r12, r13 = R_opencv[0]
+        r21, r22, r23 = R_opencv[1]
+        r31, r32, r33 = R_opencv[2]
+        tx, ty, tz = t_opencv
+        
+        # Add row to CSV data
+        csv_data.append({
+            'camera_name': camera.name,
+            'fx': fx,
+            'fy': fy,
+            'cx': cx,
+            'cy': cy,
+            'k1': 0.0,  # No distortion in Blender
+            'k2': 0.0,
+            'k3': 0.0,
+            'p1': 0.0,
+            'p2': 0.0,
+            'r11': r11,
+            'r12': r12,
+            'r13': r13,
+            'r21': r21,
+            'r22': r22,
+            'r23': r23,
+            'r31': r31,
+            'r32': r32,
+            'r33': r33,
+            'tx': tx,
+            'ty': ty,
+            'tz': tz,
+            'width': width,
+            'height': height
+        })
+    
+    # Write CSV file
+    with open(output_path, 'w', newline='') as csvfile:
+        fieldnames = ['camera_name', 'fx', 'fy', 'cx', 'cy', 'k1', 'k2', 'k3', 'p1', 'p2',
+                     'r11', 'r12', 'r13', 'r21', 'r22', 'r23', 'r31', 'r32', 'r33',
+                     'tx', 'ty', 'tz', 'width', 'height']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(csv_data)
+    
+    print(f"Camera parameters exported to: {output_path}")
+    return output_path
+
+# Function to export the entire scene as a point cloud
+def export_scene_pointcloud(output_path=None, samples_per_face=10, exclude_objects=["ground"]):
+    import os
+    import numpy as np
+    from mathutils import Vector
+    
+    # Set default output path
+    if output_path is None:
+        if bpy.data.filepath:
+            project_dir = os.path.dirname(bpy.data.filepath)
+        else:
+            project_dir = os.getcwd()
+        
+        output_dir = os.path.join(project_dir, "results", "pointcloud")
+        os.makedirs(output_dir, exist_ok=True)
+        output_path = os.path.join(output_dir, "scene.ply")
+    
+    # Collect all points and colors
+    all_points = []
+    all_colors = []
+    
+    # Process each mesh object in the scene
+    for obj in bpy.context.scene.objects:
+        if obj.type != 'MESH' or obj.name in exclude_objects:
+            continue
+        
+        print(f"Processing {obj.name}...")
+        
+        # Get the evaluated mesh (with modifiers applied)
+        depsgraph = bpy.context.evaluated_depsgraph_get()
+        obj_eval = obj.evaluated_get(depsgraph)
+        mesh = obj_eval.to_mesh()
+        
+        # Get object color (from first material if exists)
+        obj_color = [0.5, 0.5, 0.5]  # Default gray
+        if obj.data.materials and obj.data.materials[0]:
+            mat = obj.data.materials[0]
+            if mat.use_nodes:
+                # Try to get base color from Principled BSDF
+                for node in mat.node_tree.nodes:
+                    if node.type == 'BSDF_PRINCIPLED':
+                        obj_color = node.inputs['Base Color'].default_value[:3]
+                        break
+        
+        # Sample points from faces
+        for face in mesh.polygons:
+            # Calculate face area for weighted sampling
+            face_verts = [mesh.vertices[i].co for i in face.vertices]
+            
+            # Sample points on the face
+            for _ in range(samples_per_face):
+                # Random barycentric coordinates
+                r1, r2 = np.random.random(), np.random.random()
+                if r1 + r2 > 1:
+                    r1, r2 = 1 - r1, 1 - r2
+                r3 = 1 - r1 - r2
+                
+                # Calculate point position
+                if len(face_verts) == 3:  # Triangle
+                    point = r1 * face_verts[0] + r2 * face_verts[1] + r3 * face_verts[2]
+                elif len(face_verts) == 4:  # Quad - split into triangles
+                    if r1 + r2 < 0.5:
+                        # First triangle
+                        point = (r1*2) * face_verts[0] + (r2*2) * face_verts[1] + (1-r1*2-r2*2) * face_verts[2]
+                    else:
+                        # Second triangle
+                        r1, r2 = r1*2-1, r2*2
+                        if r1 + r2 > 1:
+                            r1, r2 = 1 - r1, 1 - r2
+                        point = r1 * face_verts[2] + r2 * face_verts[3] + (1-r1-r2) * face_verts[0]
+                else:
+                    # For n-gons, just use center point
+                    point = sum(face_verts, Vector()) / len(face_verts)
+                
+                # Transform to world space
+                world_point = obj.matrix_world @ point
+                all_points.append(world_point)
+                all_colors.append(obj_color)
+        
+        # Clean up
+        obj_eval.to_mesh_clear()
+    
+    # Convert to numpy arrays
+    points = np.array([[p.x, p.y, p.z] for p in all_points], dtype=np.float32)
+    colors = np.array(all_colors, dtype=np.float32)
+    
+    print(f"Total points: {len(points)}")
+    
+    # Write PLY file
+    with open(output_path, 'w') as f:
+        # PLY header
+        f.write("ply\n")
+        f.write("format ascii 1.0\n")
+        f.write(f"element vertex {len(points)}\n")
+        f.write("property float x\n")
+        f.write("property float y\n")
+        f.write("property float z\n")
+        f.write("property float red\n")
+        f.write("property float green\n")
+        f.write("property float blue\n")
+        f.write("end_header\n")
+        
+        # Write points
+        for i in range(len(points)):
+            f.write(f"{points[i][0]:.6f} {points[i][1]:.6f} {points[i][2]:.6f} ")
+            f.write(f"{colors[i][0]:.3f} {colors[i][1]:.3f} {colors[i][2]:.3f}\n")
+    
+    print(f"Exported scene point cloud to: {output_path}")
+    return output_path
