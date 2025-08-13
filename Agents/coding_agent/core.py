@@ -30,8 +30,26 @@ class CodingAgent:
         # Store combination data
         self.current_combination = None
         
-        # Load API reference
-        self.api_reference = self._load_api_reference()
+        # API Summary instead of full API reference
+        self.api_summary = """
+        # Scene Construction APIs
+        clear_scene() - Clear all objects from the scene
+        add_ground(size=50) - Add ground plane, creates object named "ground"
+        import_object(filepath, object_name=None) - Import 3D file, renames to object_name if provided
+        stick_object_to_ground(object) - Attach object to ground using constraints
+        scale_object(object_name, scale_factor) - Scale object uniformly
+        place_objects_around_house(excluded_objects=["ground", "house"], min_distance=2.0, max_distance=15.0) - Randomly place objects around house
+        remove_ground() - Remove ground plane before rendering
+        
+        # Rendering APIs  
+        create_hemisphere_cameras(num_cameras=50, camera_height_ratio=1.2) - Create hemisphere of cameras
+        render_all_hemisphere_cameras(output_path=None, file_format="PNG") - Render from all cameras
+        set_hdri_environment(hdri_path, strength=1.0, rotation_z=0.0) - Set HDRI environment lighting
+        
+        # Export APIs
+        export_camera_parameters(output_path=None) - Export camera intrinsics/extrinsics CSV
+        export_scene_pointcloud(output_path=None, samples_per_face=10) - Export scene as point cloud PLY
+        """
         
         # Store generated code and step info
         self.generated_code = ""
@@ -75,7 +93,7 @@ class CodingAgent:
     {json.dumps(fixed_combination, indent=2)}
 
     Available API functions:
-    {self.api_reference}
+    {self.api_summary}
 
     CRITICAL RULES:
     1. When you use import_object("path/to/file", "instance_id"), the object will be renamed to exactly "instance_id"
@@ -321,7 +339,7 @@ from API import *
         Review comment: {review_comment}
 
         Available API functions:
-        {self.api_reference}
+        {self.api_summary}
 
         IMPORTANT RULES:
         1. ONLY use functions that exist in the API reference above
@@ -387,7 +405,7 @@ from API import *
     Review comment: {review_comment}
 
     Available API functions:
-    {self.api_reference}
+    {self.api_summary}
 
     {"IMPORTANT: This is a scaling step. Adjust the scale factor based on the review comment to make the object proportional to the house. Remember that scale_object uses absolute scaling, not relative." if is_scale_step else ""}
 
