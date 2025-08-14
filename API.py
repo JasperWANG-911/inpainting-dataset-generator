@@ -677,112 +677,42 @@ def export_camera_parameters(output_path=None):
     print(f"Camera parameters exported to: {output_path}")
     return output_path
 
-# Function to export the entire scene as a point cloud
-def export_scene_pointcloud(output_path=None, samples_per_face=10, exclude_objects=["ground"]):
+
+# Function to export scene as OBJ file
+def export_obj(filepath=None):
     import os
-    import numpy as np
-    from mathutils import Vector
     
-    # Set default output path
-    if output_path is None:
+    if filepath is None:
         if bpy.data.filepath:
             project_dir = os.path.dirname(bpy.data.filepath)
         else:
             project_dir = os.getcwd()
-        
-        output_dir = os.path.join(project_dir, "results", "pointcloud")
+        output_dir = os.path.join(project_dir, "results", "models")
         os.makedirs(output_dir, exist_ok=True)
-        output_path = os.path.join(output_dir, "scene.ply")
+        filepath = os.path.join(output_dir, "scene.obj")
     
-    # Collect all points and colors
-    all_points = []
-    all_colors = []
+    bpy.ops.export_scene.obj(
+        filepath=filepath,
+        use_selection=False,
+        use_animation=False,
+        use_mesh_modifiers=True,
+        use_edges=True,
+        use_smooth_groups=False,
+        use_smooth_groups_bitflags=False,
+        use_normals=True,
+        use_uvs=True,
+        use_materials=True,
+        use_triangles=False,
+        use_nurbs=False,
+        use_vertex_groups=False,
+        use_blen_objects=True,
+        group_by_object=False,
+        group_by_material=False,
+        keep_vertex_order=False,
+        global_scale=1.0,
+        axis_forward='-Z',
+        axis_up='Y'
+    )
     
-    # Process each mesh object in the scene
-    for obj in bpy.context.scene.objects:
-        if obj.type != 'MESH' or obj.name in exclude_objects:
-            continue
-        
-        print(f"Processing {obj.name}...")
-        
-        # Get the evaluated mesh (with modifiers applied)
-        depsgraph = bpy.context.evaluated_depsgraph_get()
-        obj_eval = obj.evaluated_get(depsgraph)
-        mesh = obj_eval.to_mesh()
-        
-        # Get object color (from first material if exists)
-        obj_color = [0.5, 0.5, 0.5]  # Default gray
-        if obj.data.materials and obj.data.materials[0]:
-            mat = obj.data.materials[0]
-            if mat.use_nodes:
-                # Try to get base color from Principled BSDF
-                for node in mat.node_tree.nodes:
-                    if node.type == 'BSDF_PRINCIPLED':
-                        obj_color = node.inputs['Base Color'].default_value[:3]
-                        break
-        
-        # Sample points from faces
-        for face in mesh.polygons:
-            # Calculate face area for weighted sampling
-            face_verts = [mesh.vertices[i].co for i in face.vertices]
-            
-            # Sample points on the face
-            for _ in range(samples_per_face):
-                # Random barycentric coordinates
-                r1, r2 = np.random.random(), np.random.random()
-                if r1 + r2 > 1:
-                    r1, r2 = 1 - r1, 1 - r2
-                r3 = 1 - r1 - r2
-                
-                # Calculate point position
-                if len(face_verts) == 3:  # Triangle
-                    point = r1 * face_verts[0] + r2 * face_verts[1] + r3 * face_verts[2]
-                elif len(face_verts) == 4:  # Quad - split into triangles
-                    if r1 + r2 < 0.5:
-                        # First triangle
-                        point = (r1*2) * face_verts[0] + (r2*2) * face_verts[1] + (1-r1*2-r2*2) * face_verts[2]
-                    else:
-                        # Second triangle
-                        r1, r2 = r1*2-1, r2*2
-                        if r1 + r2 > 1:
-                            r1, r2 = 1 - r1, 1 - r2
-                        point = r1 * face_verts[2] + r2 * face_verts[3] + (1-r1-r2) * face_verts[0]
-                else:
-                    # For n-gons, just use center point
-                    point = sum(face_verts, Vector()) / len(face_verts)
-                
-                # Transform to world space
-                world_point = obj.matrix_world @ point
-                all_points.append(world_point)
-                all_colors.append(obj_color)
-        
-        # Clean up
-        obj_eval.to_mesh_clear()
-    
-    # Convert to numpy arrays
-    points = np.array([[p.x, p.y, p.z] for p in all_points], dtype=np.float32)
-    colors = np.array(all_colors, dtype=np.float32)
-    
-    print(f"Total points: {len(points)}")
-    
-    # Write PLY file
-    with open(output_path, 'w') as f:
-        # PLY header
-        f.write("ply\n")
-        f.write("format ascii 1.0\n")
-        f.write(f"element vertex {len(points)}\n")
-        f.write("property float x\n")
-        f.write("property float y\n")
-        f.write("property float z\n")
-        f.write("property float red\n")
-        f.write("property float green\n")
-        f.write("property float blue\n")
-        f.write("end_header\n")
-        
-        # Write points
-        for i in range(len(points)):
-            f.write(f"{points[i][0]:.6f} {points[i][1]:.6f} {points[i][2]:.6f} ")
-            f.write(f"{colors[i][0]:.3f} {colors[i][1]:.3f} {colors[i][2]:.3f}\n")
-    
-    print(f"Exported scene point cloud to: {output_path}")
-    return output_path
+    print(f"Scene exported to OBJ: {filepath}")
+    return filepath

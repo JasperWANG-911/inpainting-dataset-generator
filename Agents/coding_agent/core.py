@@ -48,7 +48,7 @@ class CodingAgent:
         
         # Export APIs
         export_camera_parameters(output_path=None) - Export camera intrinsics/extrinsics CSV
-        export_scene_pointcloud(output_path=None, samples_per_face=10) - Export scene as point cloud PLY
+        export_scene_pointcloud(output_path=None, samples_per_face=10) - Export scene as .obj
         """
         
         # Store generated code and step info
@@ -121,7 +121,7 @@ class CodingAgent:
     7. Create hemisphere cameras to capture the scene from all angles use create_hemisphere_cameras()
     8. Export the image captured by each camera using render_all_hemisphere_cameras()
     9. Export camera parameters using export_camera_parameters() with 'opencv' coordinate system
-    10. Export scene point clouds using export_scene_pointcloud() for ground truth data
+    10. Export scene mesh as .obj file using export_obj() for ground truth data
 
     IMPORTANT: Include step comments in this exact format:
     # Step 1: Clear the scene
