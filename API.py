@@ -3,7 +3,10 @@ import os
 import math
 import random
 import mathutils
-from mathutils import Vector
+import csv
+from mathutils import Vector, Matrix
+from mathutils.bvhtree import BVHTree
+
 
 # ==========================APIs for Scene Construction==========================
 # Function to clear the current scene
@@ -37,7 +40,6 @@ def add_ground(size=50):
 
 # Function to import objects
 def import_object(filepath, object_name=None):
-    """Import 3D object from file with optional renaming"""
     # Ensure file exists
     if not os.path.exists(filepath):
         print(f"Error: File not found: {filepath}")
@@ -133,21 +135,76 @@ def scale_object(object_name, scale_factor):
         print(f"Object {object_name} not found or is not a mesh.")
         return False
 
-# Function to place all objects randomly around the house for occlusion
+# Function to aid place_object_around_house()
+def check_mesh_collision(obj1, obj2, margin=0.5):    
+    # Get evaluated depsgraph
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    
+    try:
+        # Create BVH trees for both objects
+        bvh1 = BVHTree.FromObject(obj1, depsgraph)
+        bvh2 = BVHTree.FromObject(obj2, depsgraph)
+        
+        if not bvh1 or not bvh2:
+            # Fallback to bounding box if BVH creation fails
+            return check_bbox_collision(obj1, obj2, margin)
+        
+        # Check for overlap
+        overlap_pairs = bvh1.overlap(bvh2)
+        
+        if overlap_pairs:
+            return True
+        
+        # If no direct overlap but we want a margin, check distance
+        if margin > 0:
+            # Sample points on obj1's surface
+            # This is a simplified check - for more accuracy, you'd sample more points
+            bbox_corners = [obj1.matrix_world @ Vector(corner) for corner in obj1.bound_box]
+            
+            for corner in bbox_corners:
+                location, normal, index, dist = bvh2.find_nearest(corner)
+                if location and dist < margin:
+                    return True
+        
+        return False
+        
+    except Exception as e:
+        print(f"Mesh collision check failed: {e}, falling back to bbox")
+        return check_bbox_collision(obj1, obj2, margin)
+
+# Function to aid place_object_around_house()
+def check_bbox_collision(obj1, obj2, margin=0.5):
+    # Get bounding boxes in world space
+    bbox1 = [obj1.matrix_world @ Vector(v) for v in obj1.bound_box]
+    bbox2 = [obj2.matrix_world @ Vector(v) for v in obj2.bound_box]
+    
+    # Calculate min/max for each object
+    min1 = Vector([min(v[i] for v in bbox1) for i in range(3)])
+    max1 = Vector([max(v[i] for v in bbox1) for i in range(3)])
+    min2 = Vector([min(v[i] for v in bbox2) for i in range(3)])
+    max2 = Vector([max(v[i] for v in bbox2) for i in range(3)])
+    
+    # Check overlap with margin
+    return not (min1.x > max2.x + margin or max1.x < min2.x - margin or
+                min1.y > max2.y + margin or max1.y < min2.y - margin or
+                min1.z > max2.z + margin or max1.z < min2.z - margin)
+
+# Function to place objects randomly around the house without any collisions/overlap
 def place_objects_around_house(excluded_objects=["ground", "house"], 
                                min_distance=2.0, 
                                max_distance=15.0, 
                                cluster_probability=0.3,
                                max_attempts_per_object=50):
     """
+    Place objects randomly around the house using mesh-level collision detection.
+    
     Args:
         excluded_objects: List of object names to exclude from repositioning
-        min_distance: Minimum distance from house bounding box (meters)
+        min_distance: Minimum distance from house (meters)
         max_distance: Maximum distance from house center (meters)
         cluster_probability: Probability that an object will be placed near another object
         max_attempts_per_object: Maximum placement attempts per object
     """
-    import math
     
     # Get house and ground references
     house = bpy.data.objects.get("house")
@@ -157,21 +214,21 @@ def place_objects_around_house(excluded_objects=["ground", "house"],
         print("Error: House or ground not found in scene")
         return False
     
-    # Get house bounding box
+    # Get house center and safe placement radius
     house_bbox = [house.matrix_world @ Vector(v) for v in house.bound_box]
     house_center = sum(house_bbox, Vector()) / len(house_bbox)
     house_center.z = 0  # Project to ground level
     
-    # Calculate house bounding box min/max
-    house_min = Vector([min([v[i] for v in house_bbox]) for i in range(3)])
-    house_max = Vector([max([v[i] for v in house_bbox]) for i in range(3)])
-    house_width = house_max.x - house_min.x
-    house_depth = house_max.y - house_min.y
+    # Calculate a safe minimum radius based on house size
+    # Use local space dimensions for accurate sizing
+    local_dims = []
+    for i in range(3):
+        local_dims.append(max(v[i] for v in house.bound_box) - 
+                         min(v[i] for v in house.bound_box))
     
-    # Calculate the actual minimum distance from house center
-    # This accounts for the house size + desired margin
-    house_half_diagonal = math.sqrt((house_width/2)**2 + (house_depth/2)**2)
-    min_distance_from_center = house_half_diagonal + min_distance
+    # Use actual dimensions to calculate safe radius
+    house_radius = math.sqrt((local_dims[0]/2)**2 + (local_dims[1]/2)**2)
+    min_placement_radius = house_radius + min_distance
     
     # Get all objects to reposition
     objects_to_place = []
@@ -202,76 +259,50 @@ def place_objects_around_house(excluded_objects=["ground", "house"],
                 
                 # Place near the target object
                 angle_offset = random.uniform(0, 2 * math.pi)
-                distance_offset = random.uniform(1.5, 3.0)  # Distance from target object
+                distance_offset = random.uniform(1.5, 3.0)
                 
                 x = target_obj.location.x + distance_offset * math.cos(angle_offset)
                 y = target_obj.location.y + distance_offset * math.sin(angle_offset)
             else:
                 # Place randomly around house
                 angle = random.uniform(0, 2 * math.pi)
-                # Distance from house center, ensuring minimum clearance
-                distance = random.uniform(min_distance_from_center, max_distance)
+                # Distance from house center
+                distance = random.uniform(min_placement_radius, max_distance)
                 
-                # Calculate position relative to house center
+                # Calculate position
                 x = house_center.x + distance * math.cos(angle)
                 y = house_center.y + distance * math.sin(angle)
             
-            # Add some randomness to make placement more natural
+            # Add some randomness
             x += random.uniform(-0.5, 0.5)
             y += random.uniform(-0.5, 0.5)
             
             # Set temporary location
             obj.location = Vector((x, y, ground.location.z))
             
-            # Update object transform to get correct bounding box
+            # Update object transform
             bpy.context.view_layer.update()
             
-            # Get object bounding box at new location
-            obj_bbox = [obj.matrix_world @ Vector(v) for v in obj.bound_box]
-            obj_min = Vector([min([v[i] for v in obj_bbox]) for i in range(3)])
-            obj_max = Vector([max([v[i] for v in obj_bbox]) for i in range(3)])
-            
-            # Check if object is too far from house center
+            # Check distance constraint
             dist_to_house_center = (Vector((x, y, 0)) - house_center).length
             if dist_to_house_center > max_distance:
                 continue
             
-            # Check collision with house (including min_distance margin)
-            house_collision = False
-            
-            # Calculate minimum required separation
-            separation_x = min_distance
-            separation_y = min_distance
-            
-            # Check if object is too close to house
-            if (obj_min.x < house_max.x + separation_x and 
-                obj_max.x > house_min.x - separation_x and
-                obj_min.y < house_max.y + separation_y and 
-                obj_max.y > house_min.y - separation_y):
-                house_collision = True
+            # Check mesh collision with house
+            if check_mesh_collision(obj, house, min_distance):
                 continue
             
             # Check collision with other placed objects
-            object_collision = False
+            collision_found = False
             for other_obj in placed_objects:
                 if other_obj == obj:
                     continue
                 
-                # Get other object's bounding box
-                other_bbox = [other_obj.matrix_world @ Vector(v) for v in other_obj.bound_box]
-                other_min = Vector([min([v[i] for v in other_bbox]) for i in range(3)])
-                other_max = Vector([max([v[i] for v in other_bbox]) for i in range(3)])
-                
-                # Check for overlap (with small margin)
-                margin = 0.5  # Small margin between objects
-                if (obj_min.x < other_max.x + margin and 
-                    obj_max.x > other_min.x - margin and
-                    obj_min.y < other_max.y + margin and 
-                    obj_max.y > other_min.y - margin):
-                    object_collision = True
+                if check_mesh_collision(obj, other_obj, 0.5):
+                    collision_found = True
                     break
             
-            if object_collision:
+            if collision_found:
                 continue
             
             # If we get here, placement is valid
@@ -284,12 +315,23 @@ def place_objects_around_house(excluded_objects=["ground", "house"],
             placed_objects.append(obj)
             placed = True
             
-            # Calculate actual distance from object edge to house edge for logging
-            dist_x = max(0, max(house_min.x - obj_max.x, obj_min.x - house_max.x))
-            dist_y = max(0, max(house_min.y - obj_max.y, obj_min.y - house_max.y))
-            edge_dist = math.sqrt(dist_x**2 + dist_y**2) if (dist_x > 0 or dist_y > 0) else 0
+            # Calculate actual distance for logging (using BVH for accuracy)
+            try:
+                depsgraph = bpy.context.evaluated_depsgraph_get()
+                obj_bvh = BVHTree.FromObject(obj, depsgraph)
+                house_bvh = BVHTree.FromObject(house, depsgraph)
+                
+                # Sample some points on object surface to find minimum distance
+                min_dist = float('inf')
+                for corner in [obj.matrix_world @ Vector(v) for v in obj.bound_box]:
+                    location, normal, index, dist = house_bvh.find_nearest(corner)
+                    if location:
+                        min_dist = min(min_dist, dist)
+                
+                print(f"Placed {obj.name} - minimum distance from house: {min_dist:.2f}m")
+            except:
+                print(f"Placed {obj.name}")
             
-            print(f"Placed {obj.name} - edge distance from house: {edge_dist:.2f}m")
             break
         
         if not placed:
@@ -449,7 +491,6 @@ def create_hemisphere_cameras(num_cameras=50, camera_height_ratio=1.2):
 
 # Function to render the scene and export images(default path is "results/images")
 def render_all_hemisphere_cameras(output_path=None, file_format="PNG"):
-    import os
     
     # If no path specified, use default path relative to the blend file or current directory
     if output_path is None:
@@ -500,8 +541,6 @@ def render_all_hemisphere_cameras(output_path=None, file_format="PNG"):
 
 # Function to set HDRI environment lighting
 def set_hdri_environment(hdri_path, strength=1.0, rotation_z=0.0):
-    import os
-    
     # Check if file exists
     if not os.path.exists(hdri_path):
         print(f"Error: HDRI file not found: {hdri_path}")
@@ -563,9 +602,6 @@ def set_hdri_environment(hdri_path, strength=1.0, rotation_z=0.0):
 # =======================APIs for ground truth extraction=================================
 # Function to export camera intrinsics and extrinsics
 def export_camera_parameters(output_path=None):
-    import os
-    import csv
-    from mathutils import Matrix
     
     # Default output path
     if output_path is None:
@@ -677,11 +713,8 @@ def export_camera_parameters(output_path=None):
     print(f"Camera parameters exported to: {output_path}")
     return output_path
 
-
 # Function to export scene as OBJ file
 def export_obj(filepath=None):
-    import os
-    
     if filepath is None:
         if bpy.data.filepath:
             project_dir = os.path.dirname(bpy.data.filepath)
