@@ -135,211 +135,279 @@ def scale_object(object_name, scale_factor):
         print(f"Object {object_name} not found or is not a mesh.")
         return False
 
-# Function to aid place_object_around_house()
-def check_mesh_collision(obj1, obj2, margin=0.5):    
-    # Get evaluated depsgraph
-    depsgraph = bpy.context.evaluated_depsgraph_get()
+# Function to place obstructions around house without collision
+def place_objects_around_house(
+    house_name="house",
+    ground_name="ground", 
+    object_names=None,
+    min_clearance=1.0,
+    max_distance=5.0,
+    prop_clearance=1.0,
+    house_clearance=0.1,
+    max_tries_per_object=200,
+    random_yaw=True,
+    align_to_ground_normal=False
+):
     
+    def get_obj(name):
+        """get object by name, raise error if not found"""
+        obj = bpy.data.objects.get(name)
+        if not obj: 
+            raise RuntimeError(f"Object '{name}' not found")
+        return obj
+
+    def build_bvh_from_obj(obj, depsgraph):
+        """Build BVH tree from object"""
+        obj_eval = obj.evaluated_get(depsgraph)
+        mesh = obj_eval.to_mesh()
+        try:
+            mat = obj_eval.matrix_world
+            verts_world = [mat @ v.co for v in mesh.vertices]
+            polys = [p.vertices[:] for p in mesh.polygons]
+            return BVHTree.FromPolygons(verts_world, polys, all_triangles=False)
+        finally:
+            obj_eval.to_mesh_clear()
+
+    def get_local_mesh(obj, depsgraph):
+        """Get local mesh data from object"""
+        obj_eval = obj.evaluated_get(depsgraph)
+        mesh = obj_eval.to_mesh()
+        try:
+            verts_local = [v.co.copy() for v in mesh.vertices]
+            polys = [p.vertices[:] for p in mesh.polygons]
+            return verts_local, polys
+        finally:
+            obj_eval.to_mesh_clear()
+
+    def bvh_from_transformed_local(verts_local, polys, matrix_world):
+        """Build BVH tree from transformed local vertices"""
+        verts_world = [matrix_world @ v for v in verts_local]
+        return BVHTree.FromPolygons(verts_world, polys, all_triangles=False)
+
+    def raycast_down(bvh, x, y, z_top):
+        """Raycast downwards"""
+        hit = bvh.ray_cast(Vector((x, y, z_top)), Vector((0, 0, -1)))
+        if hit[0] is None: 
+            return None
+        return hit[0], hit[1]
+
+    def make_rot_align_z_to(normal):
+        """Create a rotation matrix that aligns the Z axis to the given normal vector"""
+        z_axis = normal.normalized()
+        tmp = Vector((1, 0, 0)) if abs(z_axis.x) < 0.9 else Vector((0, 1, 0))
+        x_axis = tmp.cross(z_axis).normalized()
+        y_axis = z_axis.cross(x_axis).normalized()
+        return Matrix((
+            (x_axis.x, y_axis.x, z_axis.x, 0),
+            (x_axis.y, y_axis.y, z_axis.y, 0),
+            (x_axis.z, y_axis.z, z_axis.z, 0),
+            (0, 0, 0, 1)
+        ))
+
+    def bbox_xy_radius(obj):
+        """Calculate the bounding box radius of the object in the XY plane"""
+        world_coords = [obj.matrix_world @ Vector(c) for c in obj.bound_box]
+        xs = [v.x for v in world_coords]
+        ys = [v.y for v in world_coords]
+        return 0.5 * max((max(xs) - min(xs)), (max(ys) - min(ys)))
+
+    def world_bbox_xy(obj):
+        """Get the object's bounding box in world coordinates (XY)"""
+        world_coords = [obj.matrix_world @ Vector(c) for c in obj.bound_box]
+        xs = [v.x for v in world_coords]
+        ys = [v.y for v in world_coords]
+        return min(xs), max(xs), min(ys), max(ys)
+
+    def is_point_inside_hollow_house(bvh_house, x, y, z, ray_directions=None):
+        """
+        Check if a point is inside the hollow house
+        """
+        if ray_directions is None:
+            # Use 6 main directions for raycasting
+            ray_directions = [
+                Vector((1, 0, 0)),   # +X
+                Vector((-1, 0, 0)),  # -X
+                Vector((0, 1, 0)),   # +Y
+                Vector((0, -1, 0)),  # -Y
+                Vector((0, 0, 1)),   # +Z
+                Vector((0, 0, -1))   # -Z
+            ]
+        
+        point = Vector((x, y, z))
+        hit_count = 0
+
+        # Cast rays in all directions
+        for direction in ray_directions:
+            hit = bvh_house.ray_cast(point, direction)
+            if hit[0] is not None:
+                hit_count += 1
+        
+        return hit_count >= len(ray_directions) * 0.5
+
+    def sample_around_house_bbox(house_bbox, min_clearance, max_clearance):
+        """Sample positions around the house bounding box"""
+        hx0, hx1, hy0, hy1 = house_bbox
+
+        # Expand the bounding box
+        x0 = hx0 - max_clearance
+        x1 = hx1 + max_clearance
+        y0 = hy0 - max_clearance
+        y1 = hy1 + max_clearance
+
+        # Inner bounding box
+        inner_x0 = hx0 - min_clearance
+        inner_x1 = hx1 + min_clearance
+        inner_y0 = hy0 - min_clearance
+        inner_y1 = hy1 + min_clearance
+
+        # Randomly choose a side
+        side = random.choice(['left', 'right', 'top', 'bottom'])
+        
+        if side == 'left':
+            x = random.uniform(x0, inner_x0)
+            y = random.uniform(y0, y1)
+        elif side == 'right':
+            x = random.uniform(inner_x1, x1)
+            y = random.uniform(y0, y1)
+        elif side == 'top':
+            x = random.uniform(x0, x1)
+            y = random.uniform(inner_y1, y1)
+        else:  # bottom
+            x = random.uniform(x0, x1)
+            y = random.uniform(y0, inner_y0)
+        
+        return x, y
+
+    # main logic
     try:
-        # Create BVH trees for both objects
-        bvh1 = BVHTree.FromObject(obj1, depsgraph)
-        bvh2 = BVHTree.FromObject(obj2, depsgraph)
-        
-        if not bvh1 or not bvh2:
-            # Fallback to bounding box if BVH creation fails
-            return check_bbox_collision(obj1, obj2, margin)
-        
-        # Check for overlap
-        overlap_pairs = bvh1.overlap(bvh2)
-        
-        if overlap_pairs:
-            return True
-        
-        # If no direct overlap but we want a margin, check distance
-        if margin > 0:
-            # Sample points on obj1's surface
-            # This is a simplified check - for more accuracy, you'd sample more points
-            bbox_corners = [obj1.matrix_world @ Vector(corner) for corner in obj1.bound_box]
-            
-            for corner in bbox_corners:
-                location, normal, index, dist = bvh2.find_nearest(corner)
-                if location and dist < margin:
-                    return True
-        
-        return False
-        
-    except Exception as e:
-        print(f"Mesh collision check failed: {e}, falling back to bbox")
-        return check_bbox_collision(obj1, obj2, margin)
+        depsgraph = bpy.context.evaluated_depsgraph_get()
+        house = get_obj(house_name)
+        ground = get_obj(ground_name)
 
-# Function to aid place_object_around_house()
-def check_bbox_collision(obj1, obj2, margin=0.5):
-    # Get bounding boxes in world space
-    bbox1 = [obj1.matrix_world @ Vector(v) for v in obj1.bound_box]
-    bbox2 = [obj2.matrix_world @ Vector(v) for v in obj2.bound_box]
-    
-    # Calculate min/max for each object
-    min1 = Vector([min(v[i] for v in bbox1) for i in range(3)])
-    max1 = Vector([max(v[i] for v in bbox1) for i in range(3)])
-    min2 = Vector([min(v[i] for v in bbox2) for i in range(3)])
-    max2 = Vector([max(v[i] for v in bbox2) for i in range(3)])
-    
-    # Check overlap with margin
-    return not (min1.x > max2.x + margin or max1.x < min2.x - margin or
-                min1.y > max2.y + margin or max1.y < min2.y - margin or
-                min1.z > max2.z + margin or max1.z < min2.z - margin)
+        # remove shrinkwrap constraints
+        for obj in (house, ground):
+            for constraint in list(obj.constraints):
+                if constraint.type in {'SHRINKWRAP'}:
+                    obj.constraints.remove(constraint)
 
-# Function to place objects randomly around the house without any collisions/overlap
-def place_objects_around_house(excluded_objects=["ground", "house"], 
-                               min_distance=2.0, 
-                               max_distance=15.0, 
-                               cluster_probability=0.3,
-                               max_attempts_per_object=50):
-    """
-    Place objects randomly around the house using mesh-level collision detection.
-    
-    Args:
-        excluded_objects: List of object names to exclude from repositioning
-        min_distance: Minimum distance from house (meters)
-        max_distance: Maximum distance from house center (meters)
-        cluster_probability: Probability that an object will be placed near another object
-        max_attempts_per_object: Maximum placement attempts per object
-    """
-    
-    # Get house and ground references
-    house = bpy.data.objects.get("house")
-    ground = bpy.data.objects.get("ground")
-    
-    if not house or not ground:
-        print("Error: House or ground not found in scene")
-        return False
-    
-    # Get house center and safe placement radius
-    house_bbox = [house.matrix_world @ Vector(v) for v in house.bound_box]
-    house_center = sum(house_bbox, Vector()) / len(house_bbox)
-    house_center.z = 0  # Project to ground level
-    
-    # Calculate a safe minimum radius based on house size
-    # Use local space dimensions for accurate sizing
-    local_dims = []
-    for i in range(3):
-        local_dims.append(max(v[i] for v in house.bound_box) - 
-                         min(v[i] for v in house.bound_box))
-    
-    # Use actual dimensions to calculate safe radius
-    house_radius = math.sqrt((local_dims[0]/2)**2 + (local_dims[1]/2)**2)
-    min_placement_radius = house_radius + min_distance
-    
-    # Get all objects to reposition
-    objects_to_place = []
-    for obj in bpy.context.scene.objects:
-        if (obj.type == 'MESH' and 
-            obj.name not in excluded_objects):
-            objects_to_place.append(obj)
-    
-    if not objects_to_place:
-        print("No objects to place around house")
-        return True
-    
-    # Shuffle objects for random placement order
-    random.shuffle(objects_to_place)
-    
-    # Track placed objects for clustering and collision detection
-    placed_objects = []
-    
-    # Place each object
-    for obj in objects_to_place:
-        placed = False
+        # construct BVH trees
+        bvh_ground = build_bvh_from_obj(ground, depsgraph)
+        bvh_house = build_bvh_from_obj(house, depsgraph)
+
+        # Get the bounding box of the ground and house
+        gx0, gx1, gy0, gy1 = world_bbox_xy(ground)
+        hx0, hx1, hy0, hy1 = world_bbox_xy(house)
+        house_bbox = (hx0, hx1, hy0, hy1)
         
-        for attempt in range(max_attempts_per_object):
-            # Decide if this object should cluster near another
-            if placed_objects and random.random() < cluster_probability:
-                # Choose a random already-placed object to cluster near
-                target_obj = random.choice(placed_objects)
-                
-                # Place near the target object
-                angle_offset = random.uniform(0, 2 * math.pi)
-                distance_offset = random.uniform(1.5, 3.0)
-                
-                x = target_obj.location.x + distance_offset * math.cos(angle_offset)
-                y = target_obj.location.y + distance_offset * math.sin(angle_offset)
-            else:
-                # Place randomly around house
-                angle = random.uniform(0, 2 * math.pi)
-                # Distance from house center
-                distance = random.uniform(min_placement_radius, max_distance)
-                
-                # Calculate position
-                x = house_center.x + distance * math.cos(angle)
-                y = house_center.y + distance * math.sin(angle)
-            
-            # Add some randomness
-            x += random.uniform(-0.5, 0.5)
-            y += random.uniform(-0.5, 0.5)
-            
-            # Set temporary location
-            obj.location = Vector((x, y, ground.location.z))
-            
-            # Update object transform
-            bpy.context.view_layer.update()
-            
-            # Check distance constraint
-            dist_to_house_center = (Vector((x, y, 0)) - house_center).length
-            if dist_to_house_center > max_distance:
-                continue
-            
-            # Check mesh collision with house
-            if check_mesh_collision(obj, house, min_distance):
-                continue
-            
-            # Check collision with other placed objects
-            collision_found = False
-            for other_obj in placed_objects:
-                if other_obj == obj:
+        z_top = max((ground.matrix_world @ Vector(c)).z for c in ground.bound_box) + 5.0
+
+        # Determine the objects to place
+        if object_names is None:
+            # Auto-detect: all visible MESH objects, except house and ground
+            objects_to_place = [
+                obj for obj in bpy.data.objects
+                if obj.type == 'MESH' and obj.visible_get() 
+                and obj.name not in {house_name, ground_name}
+            ]
+        else:
+            # Use specified object list
+            objects_to_place = [get_obj(name) for name in object_names]
+
+        # Pre-cache local meshes for each object
+        local_cache = {obj.name: get_local_mesh(obj, depsgraph) for obj in objects_to_place}
+        placed = []  # (obj, bvh, approx_r, matrix_world)
+        failed = []  # failed placements
+
+        # forbidden area around the house
+        house_forbid_rect = (
+            hx0 - house_clearance, hx1 + house_clearance,
+            hy0 - house_clearance, hy1 + house_clearance
+        )
+
+        def outside_house_rect(x, y):
+            x0, x1, y0, y1 = house_forbid_rect
+            return not (x0 <= x <= x1 and y0 <= y <= y1)
+
+        random.shuffle(objects_to_place)
+
+        for obj in objects_to_place:
+            verts_local, polys = local_cache[obj.name]
+            approx_r = bbox_xy_radius(obj) + prop_clearance
+
+            success = False
+            for attempt in range(max_tries_per_object):
+                # 1) Sample around the house bounding box
+                x, y = sample_around_house_bbox(house_bbox, min_clearance, max_distance)
+
+                # Ensure within ground bounds
+                if not (gx0 <= x <= gx1 and gy0 <= y <= gy1):
                     continue
-                
-                if check_mesh_collision(obj, other_obj, 0.5):
-                    collision_found = True
-                    break
-            
-            if collision_found:
-                continue
-            
-            # If we get here, placement is valid
-            # Finalize position
-            stick_object_to_ground(obj.name)
-            
-            # Add random rotation for variety
-            obj.rotation_euler.z = random.uniform(0, 2 * math.pi)
-            
-            placed_objects.append(obj)
-            placed = True
-            
-            # Calculate actual distance for logging (using BVH for accuracy)
-            try:
-                depsgraph = bpy.context.evaluated_depsgraph_get()
-                obj_bvh = BVHTree.FromObject(obj, depsgraph)
-                house_bvh = BVHTree.FromObject(house, depsgraph)
-                
-                # Sample some points on object surface to find minimum distance
-                min_dist = float('inf')
-                for corner in [obj.matrix_world @ Vector(v) for v in obj.bound_box]:
-                    location, normal, index, dist = house_bvh.find_nearest(corner)
-                    if location:
-                        min_dist = min(min_dist, dist)
-                
-                print(f"Placed {obj.name} - minimum distance from house: {min_dist:.2f}m")
-            except:
-                print(f"Placed {obj.name}")
-            
-            break
-        
-        if not placed:
-            print(f"Warning: Could not find valid placement for {obj.name} after {max_attempts_per_object} attempts")
-    
-    print(f"Successfully placed {len(placed_objects)}/{len(objects_to_place)} objects around house")
-    return True
 
+                # 2) Raycast downwards
+                hit = raycast_down(bvh_ground, x, y, z_top)
+                if hit is None:
+                    continue
+                hit_loc, hit_normal = hit
+                z = hit_loc.z
+
+                # 3) Construct transformation matrix
+                scale = obj.matrix_world.to_scale()
+                scale_mat = Matrix.Diagonal((scale.x, scale.y, scale.z, 1.0))
+
+                rot = Matrix.Identity(4)
+                if align_to_ground_normal:
+                    rot = make_rot_align_z_to(hit_normal)
+
+                if random_yaw:
+                    yaw = Matrix.Rotation(random.uniform(0, 2 * math.pi), 4, 'Z')
+                    rot = rot @ yaw
+
+                candidate_world = Matrix.Translation(Vector((x, y, z))) @ rot @ scale_mat
+
+                # 4) overlap test with placed objects
+                too_close = False
+                for (_obj, _bvh, _r, _mw) in placed:
+                    dx = _mw.to_translation().x - x
+                    dy = _mw.to_translation().y - y
+                    if (dx * dx + dy * dy) < (approx_r + _r) ** 2:
+                        too_close = True
+                        break
+                if too_close:
+                    continue
+
+                # 5) collision test with house
+                candidate_bvh = bvh_from_transformed_local(verts_local, polys, candidate_world)
+                if bvh_house.overlap(candidate_bvh):
+                    continue
+
+                # extra check: prevent objects from being placed inside hollow house
+                if is_point_inside_hollow_house(bvh_house, x, y, z):
+                    continue
+                    
+                collided = any(_bvh.overlap(candidate_bvh) for (_obj, _bvh, _r, _mw) in placed)
+                if collided:
+                    continue
+
+                # 6) success
+                obj.matrix_world = candidate_world
+                placed.append((obj, candidate_bvh, approx_r, candidate_world))
+                success = True
+                break
+
+            if not success:
+                failed.append(obj.name)
+
+        result = {
+            "success": len(placed),
+            "total": len(objects_to_place),
+            "failed": failed
+        }
+            
+        return result
+
+    except Exception as e:
+        return {"success": 0, "total": 0, "failed": [], "error": str(e)}
+    
 # Function to remove ground plane before rendering
 def remove_ground():
     # First, apply all constraints to lock object positions
@@ -372,7 +440,7 @@ def remove_ground():
     else:
         print("No ground plane found to remove")
     
-    return True
+    return True   
 
 # ========================APIs for Rendering================================
 # Function to create a hemisphere of cameras around all objects 
@@ -599,6 +667,8 @@ def set_hdri_environment(hdri_path, strength=1.0, rotation_z=0.0):
     print(f"HDRI environment set: {hdri_path}")
     return True
 
+
+
 # =======================APIs for ground truth extraction=================================
 # Function to export camera intrinsics and extrinsics
 def export_camera_parameters(output_path=None):
@@ -713,39 +783,62 @@ def export_camera_parameters(output_path=None):
     print(f"Camera parameters exported to: {output_path}")
     return output_path
 
-# Function to export scene as OBJ file
-def export_obj(filepath=None):
-    if filepath is None:
+# Function to export scene as OBJ file (Blender 4.0+ compatible)
+def export_obj(output_path=None):
+
+    if output_path is None:
         if bpy.data.filepath:
             project_dir = os.path.dirname(bpy.data.filepath)
         else:
             project_dir = os.getcwd()
         output_dir = os.path.join(project_dir, "results", "models")
         os.makedirs(output_dir, exist_ok=True)
-        filepath = os.path.join(output_dir, "scene.obj")
+        output_path = os.path.join(output_dir, "scene.obj")
     
-    bpy.ops.export_scene.obj(
-        filepath=filepath,
-        use_selection=False,
-        use_animation=False,
-        use_mesh_modifiers=True,
-        use_edges=True,
-        use_smooth_groups=False,
-        use_smooth_groups_bitflags=False,
-        use_normals=True,
-        use_uvs=True,
-        use_materials=True,
-        use_triangles=False,
-        use_nurbs=False,
-        use_vertex_groups=False,
-        use_blen_objects=True,
-        group_by_object=False,
-        group_by_material=False,
-        keep_vertex_order=False,
-        global_scale=1.0,
-        axis_forward='-Z',
-        axis_up='Y'
-    )
+    try:
+        # Try new Blender 4.0+ export operator first
+        bpy.ops.wm.obj_export(
+            filepath=output_path,
+            export_selected_objects=False,  # Export all objects
+            export_triangulated_mesh=False,
+            export_smooth_groups=False,
+            export_normals=True,
+            export_uv=True,
+            export_materials=True,
+            export_pbr_extensions=False,
+            path_mode='AUTO',
+            export_animation=False
+        )
+        print(f"Scene exported to OBJ (Blender 4.0+): {output_path}")
+        
+    except AttributeError:
+        try:
+            # Fallback to legacy operator for older Blender versions
+            bpy.ops.export_scene.obj(
+                filepath=output_path,
+                use_selection=False,
+                use_animation=False,
+                use_mesh_modifiers=True,
+                use_edges=True,
+                use_smooth_groups=False,
+                use_smooth_groups_bitflags=False,
+                use_normals=True,
+                use_uvs=True,
+                use_materials=True,
+                use_triangles=False,
+                use_nurbs=False,
+                use_vertex_groups=False,
+                use_blen_objects=True,
+                group_by_object=False,
+                group_by_material=False,
+                keep_vertex_order=False,
+                global_scale=1.0,
+                axis_forward='-Z',
+                axis_up='Y'
+            )
+            print(f"Scene exported to OBJ (Legacy): {output_path}")
+            
+        except AttributeError:
+            raise RuntimeError("Neither new (wm.obj_export) nor legacy (export_scene.obj) OBJ export operators are available")
     
-    print(f"Scene exported to OBJ: {filepath}")
-    return filepath
+    return output_path

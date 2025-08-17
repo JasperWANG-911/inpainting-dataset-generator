@@ -38,17 +38,17 @@ class CodingAgent:
         import_object(filepath, object_name=None) - Import 3D file, renames to object_name if provided
         stick_object_to_ground(object) - Attach object to ground using constraints
         scale_object(object_name, scale_factor) - Scale object uniformly
-        place_objects_around_house(excluded_objects=["ground", "house"], min_distance=2.0, max_distance=15.0) - Randomly place objects around house
+        place_objects_around_house(house_name="house", ground_name="ground", object_names=None, min_clearance=0.1, max_distance=0.2, prop_clearance=1.0, house_clearance=0.1, max_tries_per_object=200, random_yaw=True, align_to_ground_normal=False) - Randomly place objects around house
         remove_ground() - Remove ground plane before rendering
-        
-        # Rendering APIs  
+
+        # Rendering APIs
         create_hemisphere_cameras(num_cameras=50, camera_height_ratio=1.2) - Create hemisphere of cameras
         render_all_hemisphere_cameras(output_path=None, file_format="PNG") - Render from all cameras
         set_hdri_environment(hdri_path, strength=1.0, rotation_z=0.0) - Set HDRI environment lighting
         
         # Export APIs
         export_camera_parameters(output_path=None) - Export camera intrinsics/extrinsics CSV
-        export_scene_pointcloud(output_path=None, samples_per_face=10) - Export scene as .obj
+        export_obj(output_path=None) - Export scene as .obj
         """
         
         # Store generated code and step info
@@ -113,11 +113,12 @@ class CodingAgent:
         - use import_object("file/path/to/object", "instance_id") to import
         - use stick_object_to_ground("instance_id") to stick it to the ground
         - use scale_object("instance_id", scale_factors) to scale
-    4. After all objects are imported and scaled, use place_objects_around_house().
+    4. After all objects are imported and scaled, use place_objects_around_house(). The max_distance parameter should be set to be smaller than 5.
     5. Remove the ground plane using remove_ground() to show the HDRI ground instead
     6. Set up HDRI environment lighting using set_hdri_environment() before creating cameras
-    - HDRI path like "Assets/hdri/env_1.exr" or similar, which are all located in the "Assets/hdri/" directory
-    - Set appropriate strength (usually 0.5-2.0) and rotation if needed
+    - IMPORTANT: The HDRI path must be an absolute path. Use the project root path: {self.project_root}
+    - HDRI files are located in "{self.project_root}/Assets/hdri/" directory
+    - Example: set_hdri_environment(r"{self.project_root}/Assets/hdri/env_1.exr")
     7. Create hemisphere cameras to capture the scene from all angles use create_hemisphere_cameras()
     8. Export the image captured by each camera using render_all_hemisphere_cameras()
     9. Export camera parameters using export_camera_parameters() with 'opencv' coordinate system

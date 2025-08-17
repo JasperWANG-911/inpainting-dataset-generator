@@ -9,7 +9,7 @@ class ExecutionAgent:
     ExecutionAgent, to execute code in Blender.
     """
     
-    def __init__(self, host='localhost', port=8089, timeout=60):
+    def __init__(self, host='localhost', port=8089, timeout=1000):
         """
         initialize the ExecutionAgent. Need to run blender_server.py first.
         """

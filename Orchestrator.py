@@ -19,7 +19,7 @@ class Orchestrator:
         }
         self.project_root = Path(__file__).parent
         self.logger = self._setup_logger()
-        self.timeout = httpx.Timeout(300, connect=10.0)
+        self.timeout = httpx.Timeout(1000, connect=10.0)
         self.current_combination = None
         self.total_steps = 0
         # REMOVED: self.reviewing_images_dir - no longer needed
