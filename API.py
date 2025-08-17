@@ -442,6 +442,22 @@ def remove_ground():
     
     return True   
 
+# Function to remove all objects except the house
+def remove_all_except_house(house_name="house"):
+    objects_to_remove = []
+    
+    for obj in bpy.data.objects:
+        # Only remove mesh objects that are not the house
+        if obj.type == 'MESH' and obj.name != house_name:
+            objects_to_remove.append(obj)
+    
+    # Remove objects
+    for obj in objects_to_remove:
+        bpy.data.objects.remove(obj, do_unlink=True)
+    
+    print(f"Removed {len(objects_to_remove)} objects, keeping only {house_name}")
+    return len(objects_to_remove)
+
 # ========================APIs for Rendering================================
 # Function to create a hemisphere of cameras around all objects 
 def create_hemisphere_cameras(num_cameras=50, camera_height_ratio=1.2):
@@ -667,8 +683,6 @@ def set_hdri_environment(hdri_path, strength=1.0, rotation_z=0.0):
     print(f"HDRI environment set: {hdri_path}")
     return True
 
-
-
 # =======================APIs for ground truth extraction=================================
 # Function to export camera intrinsics and extrinsics
 def export_camera_parameters(output_path=None):
@@ -842,3 +856,33 @@ def export_obj(output_path=None):
             raise RuntimeError("Neither new (wm.obj_export) nor legacy (export_scene.obj) OBJ export operators are available")
     
     return output_path
+
+# Function to export house-only results (images, camera parameters, and OBJ)
+def export_house_only_results(base_output_dir=None):
+    if base_output_dir is None:
+        if bpy.data.filepath:
+            project_dir = os.path.dirname(bpy.data.filepath)
+        else:
+            project_dir = os.getcwd()
+        base_output_dir = os.path.join(project_dir, "results", "house_only")
+    
+    # Create directories
+    images_dir = os.path.join(base_output_dir, "images")
+    os.makedirs(images_dir, exist_ok=True)
+    
+    # Render all views
+    render_all_hemisphere_cameras(output_path=images_dir)
+    
+    # Export camera parameters
+    camera_params_path = os.path.join(base_output_dir, "intrinsics_and_extrinsics.csv")
+    export_camera_parameters(output_path=camera_params_path)
+    
+    # Export OBJ
+    obj_path = os.path.join(base_output_dir, "house.obj")
+    export_obj(output_path=obj_path)
+    
+    return {
+        "images_dir": images_dir,
+        "camera_params": camera_params_path,
+        "obj": obj_path
+    }

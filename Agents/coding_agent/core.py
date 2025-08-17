@@ -40,6 +40,7 @@ class CodingAgent:
         scale_object(object_name, scale_factor) - Scale object uniformly
         place_objects_around_house(house_name="house", ground_name="ground", object_names=None, min_clearance=0.1, max_distance=0.2, prop_clearance=1.0, house_clearance=0.1, max_tries_per_object=200, random_yaw=True, align_to_ground_normal=False) - Randomly place objects around house
         remove_ground() - Remove ground plane before rendering
+        remove_all_except_house() - Remove all objects except the house and cameras
 
         # Rendering APIs
         create_hemisphere_cameras(num_cameras=50, camera_height_ratio=1.2) - Create hemisphere of cameras
@@ -49,6 +50,7 @@ class CodingAgent:
         # Export APIs
         export_camera_parameters(output_path=None) - Export camera intrinsics/extrinsics CSV
         export_obj(output_path=None) - Export scene as .obj
+        export_house_only_results() - Export images, camera parameters, and OBJ for house only
         """
         
         # Store generated code and step info
@@ -123,6 +125,8 @@ class CodingAgent:
     8. Export the image captured by each camera using render_all_hemisphere_cameras()
     9. Export camera parameters using export_camera_parameters() with 'opencv' coordinate system
     10. Export scene mesh as .obj file using export_obj() for ground truth data
+    11. Remove all objects except the house using remove_all_except_house()
+    12. Export house-only results using export_house_only_results() to separate directory
 
     IMPORTANT: Include step comments in this exact format:
     # Step 1: Clear the scene
